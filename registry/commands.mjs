@@ -76,6 +76,7 @@ export const CLI_COMMANDS = Object.freeze({
   baseline: command('Create or update a visual regression baseline', 'gdeck baseline [profile] [project] [--frames N]', ['frames', 'godot', 'seed', 'threshold', 'tolerance', 'timeout'], [positional('profile'), positional('project')]),
   'visual-test': command('Compare a capture against a visual baseline', 'gdeck visual-test [profile] [project] [--tolerance N] [--threshold N]', ['frames', 'report', 'godot', 'seed', 'threshold', 'tolerance', 'timeout'], [positional('profile'), positional('project')]),
   verify: command('Run the configured verification pipeline', 'gdeck verify [project] [--profile NAME] [--output REPORT.json] [--verbosity LEVEL] [--json]', ['profile', 'output', 'timeout', 'verbosity', 'json'], [positional('project')]),
+  'oracle-verify': command('Run the repository Godot oracle chain (npm run check Godot side + reference baseline)', 'gdeck oracle-verify [project] [--json] [--timeout SECONDS]', ['json', 'timeout'], [positional('project')]),
   templates: command('Inspect or install official export templates', 'gdeck templates <status|install> [project]', ['godot', 'force', 'timeout'], [], {
     defaultAction: 'status', actions: {
       status: nestedAction('gdeck templates status [project]', ['godot', 'timeout'], 1, 2),
@@ -150,6 +151,7 @@ export const PI_FAMILIES = Object.freeze({
       visual: action('visual-test', ['profile', 'tolerance', 'threshold', 'timeout'], 'never', 'none'),
       benchmark: action('benchmark', ['profile', 'frames', 'warmupFrames', 'timeout'], 'never', 'none'),
       verify: action('verify', ['profile', 'timeout', 'verbosity', 'json'], 'verify-plan', 'generated-write', true),
+      oracle: action('oracle-verify', ['timeout', 'json'], 'never', 'generated-write'),
     },
   },
   release: {

@@ -928,6 +928,13 @@ export function buildCliArgs(family, params, project, internal = {}) {
       if (params.json === true) args.push('--json');
       return args;
     }
+    if (action === 'oracle') {
+      assertOnly(params, ['timeout', 'json']);
+      const args = ['oracle-verify', project];
+      if (params.json === true) args.push('--json');
+      addTimeout(args, params.timeout);
+      return args;
+    }
     throw new Error(`Unsupported validation action: ${action}`);
   }
 

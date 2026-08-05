@@ -2328,6 +2328,105 @@ function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
+// Oracle chain: the Godot-side cross-client verification scripts from the
+// repository's `npm run check` chain, plus the reference baseline check.
+// Kept in sync with package.json scripts.check; Web-side steps (npm test,
+// build) are intentionally outside the Godot-focused oracle command.
+const ORACLE_CHAIN_SCRIPTS = [
+  'godot:program-check',
+  'godot:domain-data:check',
+  'godot:parity-regression:verify',
+  'godot:full-loop:verify',
+  'godot:migration-check',
+  'godot:project:verify',
+  'godot:application-session:verify',
+  'godot:tactical-battle:verify',
+  'godot:tactical-movement:verify',
+  'godot:tactical-attack:verify',
+  'godot:tactical-skill:verify',
+  'godot:tactical-ai:verify',
+  'godot:tactical-outcome:verify',
+  'godot:tactical-settlement:verify',
+  'godot:production-save:verify',
+  'godot:campaign-entry:verify',
+  'godot:campaign-setup:presentation',
+  'godot:tactical-presentation:verify',
+  'reference:check',
+];
+
+function oracleVerify(projectCandidate, options) {
+  const project = resolveProject(projectCandidate);
+  let packageFile = join(project, 'package.json');
+  let cursor = project;
+  while (!existsSync(packageFile)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) throw new Error(`oracle-verify requires the repository package.json (searched from ${project})`);
+    cursor = parent;
+    packageFile = join(cursor, 'package.json');
+  }
+  const repoRoot = dirname(packageFile);
+  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const perScriptTimeoutMs = timeoutMilliseconds(options);
+  const started = Date.now();
+  const results = [];
+  let failed = 0;
+  for (const script of ORACLE_CHAIN_SCRIPTS) {
+    const scriptStarted = Date.now();
+    let status;
+    let durationMs;
+    try {
+      const npmResult = spawnSync(npmCommand, ['run', script, '--silent'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        timeout: perScriptTimeoutMs,
+        maxBuffer: 32 * 1024 * 1024,
+        windowsHide: true,
+        shell: true,
+      });
+      const timedOut = npmResult.error?.code === 'ETIMEDOUT';
+      status = !timedOut && npmResult.status === 0 ? 'passed' : 'failed';
+      durationMs = Date.now() - scriptStarted;
+      if (status !== 'passed') failed += 1;
+      if (timedOut) console.error(color.red(`  ${script}: timed out after ${perScriptTimeoutMs}ms`));
+      else if (npmResult.status !== 0 && !options.quiet) {
+        const tail = String(npmResult.stdout ?? '').split(/\r?\n/).filter((line) => line.trim()).slice(-4).join('\n');
+        if (tail) console.error(color.muted(`    ${tail.slice(0, 600)}`));
+      }
+    } catch (error) {
+      status = 'failed';
+      durationMs = Date.now() - scriptStarted;
+      failed += 1;
+      if (error.message) console.error(color.red(`  ${script}: ${error.message.slice(0, 300)}`));
+    }
+    results.push({ script, status, durationMs });
+    const marker = status === 'passed' ? color.green('passed') : color.red('failed');
+    console.log(`  ${marker.padEnd(7)} ${script.padEnd(38)} ${(durationMs / 1000).toFixed(1)}s`);
+  }
+  const totalMs = Date.now() - started;
+  const report = {
+    schemaVersion: 1,
+    toolVersion: TOOL_VERSION,
+    project,
+    chain: 'npm run check (Godot side + reference)',
+    totalSeconds: totalMs / 1000,
+    passed: results.filter((item) => item.status === 'passed').length,
+    failed,
+    results,
+  };
+  const reportPath = join(project, '.gdeck', 'reports', `oracle-${timestamp()}.json`);
+  try {
+    mkdirSync(dirname(reportPath), { recursive: true });
+    writeFileSync(reportPath, JSON.stringify(report, null, 2));
+  } catch { /* report write is best-effort */ }
+  if (options.json) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(`Oracle chain: ${report.passed} passed, ${report.failed} failed, ${(totalMs / 1000).toFixed(1)}s`);
+    console.log(`  Report: ${reportPath}`);
+  }
+  return failed > 0 ? 1 : 0;
+}
+
 const SCENE_RESOURCE_TYPES = new Map([
   ['Script', ['.gd']],
   ['Texture2D', ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.svg']],
@@ -5563,6 +5662,9 @@ async function main() {
         status = verifyProject(
           parsed.positional[0], parsed.options, internalVerification.expectedPlanDigest, internalVerification.invocationIdentity,
         );
+        break;
+      case 'oracle-verify':
+        status = oracleVerify(parsed.positional[0], parsed.options);
         break;
       case 'templates':
         status = await templatesCommand(parsed.positional, parsed.options);
