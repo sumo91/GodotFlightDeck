@@ -1,0 +1,14 @@
+# Local tool directory version control
+# node_modules and runtime caches
+node_modules/
+*.log
+
+# Pre-git backups (kept on disk for reference; superseded by git history)
+cli/backup-mbgd*/
+*.bak*
+**/*.bak*
+extensions/runtime.mjs.bak-gdeck
+
+# Editor/tool droppings
+.DS_Store
+Thumbs.db
