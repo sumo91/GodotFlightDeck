@@ -848,8 +848,16 @@ export function buildCliArgs(family, params, project, internal = {}) {
 
   if (family === 'validate') {
     if (action === 'check') {
-      assertOnly(params, ['timeout']);
-      const args = ['check', project]; addTimeout(args, params.timeout); return args;
+      assertOnly(params, ['file', 'timeout']);
+      const args = ['check', project];
+      if (params.file !== undefined) {
+        if (typeof params.file !== 'string' || params.file.length === 0 || params.file.length > 512) {
+          throw new Error('check file must be a non-empty path');
+        }
+        args.push('--file', params.file);
+      }
+      addTimeout(args, params.timeout);
+      return args;
     }
     if (action === 'unit') {
       assertOnly(params, ['filter', 'timeout', 'verbosity']);
@@ -899,7 +907,7 @@ export function buildCliArgs(family, params, project, internal = {}) {
       addTimeout(args, params.timeout); return args;
     }
     if (action === 'verify') {
-      assertOnly(params, ['profile', 'timeout', 'verbosity']);
+      assertOnly(params, ['profile', 'timeout', 'verbosity', 'json']);
       const args = ['verify', project];
       if (params.profile !== undefined) args.push('--profile', requireText(params.profile, 'Verification Profile', PROFILE_PATTERN, 100));
       if (internal.reportPath) args.push('--output', internal.reportPath);
@@ -917,9 +925,83 @@ export function buildCliArgs(family, params, project, internal = {}) {
         }
         args.push(`--gdeck-internal-invocation-identity=${internal.invocationIdentity}`);
       }
+      if (params.json === true) args.push('--json');
       return args;
     }
     throw new Error(`Unsupported validation action: ${action}`);
+  }
+
+  if (family === 'scene') {
+    if (action === 'doctor') {
+      assertOnly(params, ['timeout', 'json']);
+      const args = ['scene', 'doctor', project];
+      if (params.json === true) args.push('--json');
+      addTimeout(args, params.timeout);
+      return args;
+    }
+    if (action === 'set') {
+      assertOnly(params, ['scene', 'path', 'property', 'value', 'apply', 'timeout']);
+      if (typeof params.scene !== 'string' || !params.scene.startsWith('res://')) {
+        throw new Error('scene set requires a res:// scene path');
+      }
+      if (typeof params.property !== 'string' || params.property.length === 0) {
+        throw new Error('scene set requires a property name');
+      }
+      const args = ['scene', 'set', params.scene, params.path ?? '.', params.property, JSON.stringify(params.value), project];
+      if (params.apply === true) args.push('--apply');
+      addTimeout(args, params.timeout);
+      return args;
+    }
+    if (action === 'restore') {
+      assertOnly(params, ['path', 'apply', 'timeout']);
+      if (typeof params.path !== 'string' || params.path.length === 0) {
+        throw new Error('scene restore requires a snapshot path');
+      }
+      const args = ['scene', 'restore', params.path, project];
+      if (params.apply === true) args.push('--apply');
+      addTimeout(args, params.timeout);
+      return args;
+    }
+    throw new Error(`Unsupported scene action: ${action}`);
+  }
+
+  if (family === 'run') {
+    if (action === 'query') {
+      assertOnly(params, ['query', 'query-file', 'frames', 'seed', 'json', 'timeout']);
+      const args = ['run', project];
+      if (params.query !== undefined) {
+        if (typeof params.query !== 'string' || params.query.length === 0 || params.query.length > 32 * 1024) {
+          throw new Error('run query must be a non-empty JSON string');
+        }
+        args.push('--query', params.query);
+      }
+      if (params['query-file'] !== undefined) {
+        if (typeof params['query-file'] !== 'string' || params['query-file'].length === 0 || params['query-file'].length > 512) {
+          throw new Error('run query-file must be a non-empty path');
+        }
+        args.push('--query-file', params['query-file']);
+      }
+      if (params.frames !== undefined) optionalNumber(params.frames, 'frames', 1, 100000);
+      if (params.frames !== undefined) args.push('--frames', String(params.frames));
+      if (params.seed !== undefined) optionalNumber(params.seed, 'seed', 0, 2147483647);
+      if (params.seed !== undefined) args.push('--seed', String(params.seed));
+      if (params.json === true) args.push('--json');
+      addTimeout(args, params.timeout);
+      return args;
+    }
+    if (action === 'watch') {
+      assertOnly(params, ['watch', 'main-scene', 'timeout']);
+      const args = ['run', project, '--watch'];
+      if (params['main-scene'] !== undefined) {
+        if (typeof params['main-scene'] !== 'string' || !params['main-scene'].startsWith('res://')) {
+          throw new Error('run watch main-scene must be a res:// path');
+        }
+        args.push('--main-scene', params['main-scene']);
+      }
+      addTimeout(args, params.timeout);
+      return args;
+    }
+    throw new Error(`Unsupported run action: ${action}`);
   }
 
   if (family === 'release') {

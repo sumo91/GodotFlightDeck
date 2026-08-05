@@ -86,8 +86,10 @@ const ProjectParams = familySchema("project");
 const ValidateParams = familySchema("validate");
 const ReleaseParams = familySchema("release");
 const EditorParams = familySchema("editor");
+const SceneParams = familySchema("scene");
+const RunParams = familySchema("run");
 
-type ToolFamily = "project" | "validate" | "release" | "editor";
+type ToolFamily = "project" | "validate" | "release" | "editor" | "scene" | "run";
 type ToolParams = Record<string, any>;
 
 interface InvocationDetails {
@@ -824,6 +826,34 @@ export default function godotFlightDeckExtension(pi: ExtensionAPI) {
     ],
     parameters: EditorParams,
     execute: (_id, params, signal, onUpdate, ctx) => executeFamily(pi, "editor", params, signal, onUpdate, ctx),
+  });
+
+  pi.registerTool({
+    name: "gdeck_scene",
+    label: "Godot Flight Deck Scene",
+    description: "Inspect or edit .tscn scene files headlessly: scene doctor checks integrity (broken/warning with details), scene set edits a node property with JSON-typed value (dry-run by default, --apply commits with snapshot), scene restore rolls back a snapshot.",
+    promptSnippet: "Inspect and safely edit Godot scenes without opening the editor",
+    promptGuidelines: [
+      "Use gdeck_scene doctor before editing scenes, and after any manual .tscn change.",
+      "scene set defaults to dry-run; commit only with apply after reviewing the preview.",
+      "scene set writes real project files; never bypass its confirmation.",
+    ],
+    parameters: SceneParams,
+    execute: (_id, params, signal, onUpdate, ctx) => executeFamily(pi, "scene", params, signal, onUpdate, ctx),
+  });
+
+  pi.registerTool({
+    name: "gdeck_run",
+    label: "Godot Flight Deck Run",
+    description: "Launch the Godot project headlessly: query injects white-listed read-only runtime queries (property/tree/signals/group) with deterministic seed/frames and returns results; watch streams the game stdout/stderr live with error markers (timeout ends the observation window).",
+    promptSnippet: "Observe a running Godot game headlessly: query node state or watch output",
+    promptGuidelines: [
+      "Use gdeck_run query to verify runtime state (e.g. a UI node's visible property) without human eyes.",
+      "gdeck_run watch ends by timeout; a timeout exit is a successful observation, not a failure.",
+      "Query results are deterministic under the same seed and frames.",
+    ],
+    parameters: RunParams,
+    execute: (_id, params, signal, onUpdate, ctx) => executeFamily(pi, "run", params, signal, onUpdate, ctx),
   });
 
   pi.registerCommand("gdeck-status", {

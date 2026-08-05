@@ -101,6 +101,7 @@ export const PI_FIELDS = Object.freeze({
   name: field('string', { minLength: 1, maxLength: 100, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$', description: 'Project-local scenario name' }),
   filter: field('string', { minLength: 1, maxLength: 120 }),
   frames: field('integer', { minimum: 1, maximum: 100000 }),
+  seed: field('integer', { minimum: 0, maximum: 2147483647, description: 'Deterministic random seed' }),
   warmupFrames: field('integer', { minimum: 0, maximum: 100000, description: 'Benchmark warmup frames excluded from stable metrics' }),
   tolerance: field('number', { minimum: 0, maximum: 1 }),
   threshold: field('number', { minimum: 0, maximum: 1 }),
@@ -121,6 +122,14 @@ export const PI_FIELDS = Object.freeze({
   batchName: field('string', { maxLength: 80, description: 'Batch transaction name' }),
   operations: field('operations', { minItems: 1, maxItems: 100 }),
   commit: field('boolean', { description: 'Commit a validated batch; false performs dry-run only' }),
+  file: field('string', { description: 'Check a single .gd script instead of the whole project' }),
+  json: field('boolean', { description: 'Emit structured JSON output where supported' }),
+  apply: field('boolean', { description: 'Commit a write operation after dry-run preview' }),
+  scene: field('string', { description: 'Scene res:// path to edit' }),
+  query: field('string', { description: 'White-listed read-only runtime query list (inline JSON array)' }),
+  'query-file': field('string', { description: 'File containing the runtime query JSON list' }),
+  watch: field('boolean', { description: 'Stream the game stdout/stderr live with error markers' }),
+  'main-scene': field('string', { description: 'Scene to run when watching (res:// path)' }),
 });
 
 const action = (cliCommand, parameters, confirmation, risk, leaseEligible = false) => ({
@@ -134,13 +143,13 @@ export const PI_FAMILIES = Object.freeze({
     },
   },
   validate: {
-    toolName: 'gdeck_validate', fields: ['project', 'timeout', 'profile', 'name', 'filter', 'frames', 'warmupFrames', 'tolerance', 'threshold', 'verbosity'], actions: {
-      check: action('check', ['timeout'], 'never', 'none'), unit: action('unit', ['filter', 'timeout', 'verbosity'], 'never', 'none'),
+    toolName: 'gdeck_validate', fields: ['project', 'timeout', 'profile', 'name', 'filter', 'frames', 'warmupFrames', 'tolerance', 'threshold', 'verbosity', 'file', 'json'], actions: {
+      check: action('check', ['file', 'timeout'], 'never', 'none'), unit: action('unit', ['filter', 'timeout', 'verbosity'], 'never', 'none'),
       scenario: action('scenario', ['name', 'profile', 'frames', 'timeout'], 'never', 'none'),
       baseline: action('baseline', ['profile', 'frames', 'timeout'], 'always', 'destructive'),
       visual: action('visual-test', ['profile', 'tolerance', 'threshold', 'timeout'], 'never', 'none'),
       benchmark: action('benchmark', ['profile', 'frames', 'warmupFrames', 'timeout'], 'never', 'none'),
-      verify: action('verify', ['profile', 'timeout', 'verbosity'], 'verify-plan', 'generated-write', true),
+      verify: action('verify', ['profile', 'timeout', 'verbosity', 'json'], 'verify-plan', 'generated-write', true),
     },
   },
   release: {
@@ -164,6 +173,19 @@ export const PI_FAMILIES = Object.freeze({
       'resource-set': action('editor', ['resource', 'property', 'value'], 'always', 'project-write', true), 'resource-delete': action('editor', ['resource'], 'delete', 'destructive'),
       'resource-assign': action('editor', ['path', 'property', 'resource'], 'always', 'project-write', true), batch: action('editor', ['name', 'operations', 'commit'], 'batch-commit', 'destructive'),
       undo: action('editor', [], 'always', 'project-write', true), redo: action('editor', [], 'always', 'project-write', true), save: action('editor', [], 'always', 'project-write', true),
+    },
+  },
+  scene: {
+    toolName: 'gdeck_scene', fields: ['project', 'timeout', 'json', 'apply', 'scene', 'path', 'property', 'value'], actions: {
+      doctor: action('scene', ['timeout', 'json'], 'never', 'none'),
+      set: action('scene', ['scene', 'path', 'property', 'value', 'apply', 'timeout'], 'always', 'project-write', true),
+      restore: action('scene', ['path', 'apply', 'timeout'], 'always', 'project-write', true),
+    },
+  },
+  run: {
+    toolName: 'gdeck_run', fields: ['project', 'timeout', 'frames', 'seed', 'json', 'query', 'query-file', 'watch', 'main-scene'], actions: {
+      query: action('run', ['query', 'query-file', 'frames', 'seed', 'json', 'timeout'], 'never', 'generated-write'),
+      watch: action('run', ['watch', 'main-scene', 'timeout'], 'never', 'none'),
     },
   },
 });
