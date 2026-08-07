@@ -1,0 +1,11 @@
+{
+  "name": "godot-flight-deck-mcp",
+  "version": "1.6.5",
+  "private": true,
+  "description": "MCP server exposing GodotFlightDeck gdeck_* tool families to ZCode and other MCP clients",
+  "type": "module",
+  "bin": { "gdeck-mcp": "./server.mjs" },
+  "dependencies": { "@modelcontextprotocol/sdk": "^1.0.0" },
+  "engines": { "node": ">=20" },
+  "license": "MIT"
+}

@@ -3,13 +3,15 @@
 Changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics.
 This fork is **not** a byte-identical upstream release.
 
-## 1.6.5 (Codex integration)
+## 1.6.5 (Codex + ZCode integration)
 
 - [x] `GDECK_CODEX_DIRECT=1` now selects the same in-process direct mode as `GDECK_CURSOR_COMPAT=1` — the Codex fork (1.6.0) is unified into this single fork and retired
 - [x] Port `codex/gdeck.ps1` wrapper (direct mode + default `GODOT_BIN` Godot 4.7.1)
 - [x] Doctor `cursor-compat-mode` check renamed to "Agent-shell compat mode" (identifier kept); detail covers both env vars
 - [x] Windows ACL mode-bit skip and patch-level Godot version parsing were already present from earlier ports (verified against the Codex fork)
 - [x] Codex agent skill `godot-flight-deck-codex` retargeted to the unified tool
+- [x] New `mcp/` MCP server exposing the six `gdeck_*` tool families to ZCode (reuses `registry/commands.mjs` PI_FAMILIES; project resolution via `findGodotProject`)
+- [x] ZCode wiring: `~/.zcode/cli/config.json` MCP server entry + `~/.zcode/skills/godot-flight-deck` junction; skill gained a platform tool-mapping section
 
 ## 1.6.4 (rebrand)
 

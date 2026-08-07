@@ -1,12 +1,20 @@
 ---
 name: godot-flight-deck
 description: Operate Godot Flight Deck for Godot project setup, diagnostics, GDScript and unit tests, scenarios, visual regression, benchmarks, unified verification, internal desktop exports, and authenticated Editor automation. Use when an Agent needs to inspect, test, validate, export, or safely edit a Godot project.
-compatibility: Requires Node.js 20+, Godot Flight Deck, a trusted Pi project containing project.godot, and Godot 4.7 for the primary compatibility target.
+compatibility: Requires Node.js 20+, Godot Flight Deck, a trusted project containing project.godot (Pi extension, MCP server, or CLI), and Godot 4.7 for the primary compatibility target.
 ---
 
 # Godot Flight Deck
 
-Use the structured `gdeck_*` tools supplied by the Pi extension. Do not invoke `gdeck` through `bash` when these tools are available, and do not construct raw CLI arguments.
+Use the structured `gdeck_*` tools when available: on Pi they come from the extension, in ZCode they arrive as `godot-flight-deck__gdeck_*` from the MCP server. Do not invoke `gdeck` through `bash` when these tools are available, and do not construct raw CLI arguments.
+
+## Platform tool mapping
+
+| Platform | Tool access |
+|---|---|
+| Pi (Cursor) | `gdeck_*` tools from the Pi extension |
+| ZCode / MCP | `godot-flight-deck__gdeck_*` tools from the `godot-flight-deck` MCP server (`mcp/server.mjs`); always pass `project` explicitly |
+| Plain shell | `bin\gdeck.cmd` or `node cli/gdeck.mjs` — fallback only |
 
 ## Standard workflow
 
