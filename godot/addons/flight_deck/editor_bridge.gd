@@ -2,7 +2,7 @@
 class_name FlightDeckEditorBridge
 extends RefCounted
 
-const VERSION := "1.6.4"
+const VERSION := "1.6.5"
 const ALLOWED_RESOURCE_CLASSES := [&"Theme", &"StyleBoxFlat", &"SystemFont", &"Gradient", &"Curve", &"PhysicsMaterial"]
 const ALLOWED_NODE_CLASSES := [
 	&"Node", &"Node2D", &"Control", &"CanvasLayer", &"Label", &"Button", &"ColorRect",

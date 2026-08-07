@@ -2,7 +2,7 @@
 
 Path: `D:\03_Godot\04_Tools\GodotFlightDeck`
 
-Version: **1.6.4** (changelog-driven fork of upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics / P0–P1 Editor Bridge layering).
+Version: **1.6.5** (changelog-driven fork of upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics / P0–P1 Editor Bridge layering / Codex integration).
 
 The upstream bundle at `D:\03_Godot\GodotFlightDeck-1.6.0-Windows` is left untouched.
 

@@ -311,8 +311,11 @@ function remainingDeadlineMilliseconds(deadlineNs) {
 }
 
 function cursorCompatEnabled() {
-  // Cursor fork default: avoid nested Job Object supervisors under agent shells.
-  // Set GDECK_CURSOR_COMPAT=0 to restore upstream process-runner supervision.
+  // Agent-shell compat: avoid nested Job Object supervisors under agent shells.
+  // Cursor uses GDECK_CURSOR_COMPAT=1 (default on in this fork); Codex uses
+  // GDECK_CODEX_DIRECT=1 (explicit opt-in, highest priority). Set
+  // GDECK_CURSOR_COMPAT=0 to restore upstream process-runner supervision.
+  if (process.env.GDECK_CODEX_DIRECT === '1') return true;
   const raw = process.env.GDECK_CURSOR_COMPAT;
   if (raw === '0' || raw === 'false' || raw === 'off') return false;
   if (raw === '1' || raw === 'true' || raw === 'on') return true;
@@ -2076,11 +2079,11 @@ async function doctor(projectCandidate, options, internalStage = null) {
   checks.push({ id: 'project-root', name: 'Project', status: 'ok', detail: project });
   checks.push({
     id: 'cursor-compat-mode',
-    name: 'Cursor compat mode',
+    name: 'Agent-shell compat mode',
     status: 'ok',
     detail: cursorCompatEnabled()
-      ? 'enabled (in-process CLI; nested Job supervisors skipped)'
-      : 'disabled (nested process-runner supervision active; set GDECK_CURSOR_COMPAT=1 for Cursor shells)',
+      ? 'enabled (in-process CLI; nested Job supervisors skipped; GDECK_CURSOR_COMPAT or GDECK_CODEX_DIRECT)'
+      : 'disabled (nested process-runner supervision active; set GDECK_CURSOR_COMPAT=1 or GDECK_CODEX_DIRECT=1)',
   });
   const addonPluginPath = join(sourceProject, 'addons', 'flight_deck', 'plugin.cfg');
   let installedAddonVersion = '';

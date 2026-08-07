@@ -182,7 +182,7 @@ func _terminal_report() -> Dictionary:
 		"schema_version": 2,
 		"complete": true,
 		"unit_binding": unit_binding,
-		"flight_deck_version": "1.6.4",
+		"flight_deck_version": "1.6.5",
 		"godot_version": Engine.get_version_info().get("string", "unknown"),
 		"tests_root": tests_root,
 		"filter": filter_text,
