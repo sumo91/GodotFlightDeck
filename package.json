@@ -1,14 +1,14 @@
 {
-  "name": "godot-flight-deck-cursor",
-  "version": "1.6.3-cursor.2",
+  "name": "godot-flight-deck",
+  "version": "1.6.4",
   "private": true,
-  "description": "Cursor-compatible fork of Godot Flight Deck with changelog-driven 1.6.1/1.6.3 ports (Windows agent-shell Job Object workaround)",
+  "description": "Agent-tooling fork of Godot Flight Deck with changelog-driven 1.6.1/1.6.3 ports (Windows agent-shell Job Object workaround)",
   "type": "module",
   "keywords": [
     "godot",
     "testing",
     "automation",
-    "cursor"
+    "agent"
   ],
   "files": [
     "cli/",
@@ -18,14 +18,14 @@
     "skills/",
     "bin/",
     "README.md",
-    "README-CURSOR.md",
-    "CHANGELOG-CURSOR.md",
+    "README-FORK.md",
+    "CHANGELOG-FORK.md",
     "UPSTREAM.txt",
     "LICENSE"
   ],
   "bin": {
     "gdeck": "./cli/gdeck.mjs",
-    "gdeck-cursor": "./bin/gdeck-cursor.mjs"
+    "gdeck-agent": "./bin/gdeck.mjs"
   },
   "engines": {
     "node": ">=20"

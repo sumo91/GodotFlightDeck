@@ -1,8 +1,8 @@
-# Godot Flight Deck — Cursor Fork
+# Godot Flight Deck — Fork Notes
 
-Path: `D:\03_Godot\04_Tools\GodotFlightDeck-Cursor`
+Path: `D:\03_Godot\04_Tools\GodotFlightDeck`
 
-Version: **1.6.3-cursor.2** (changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus Cursor ergonomics / P0–P1 Agent Editor layering).
+Version: **1.6.4** (changelog-driven fork of upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics / P0–P1 Editor Bridge layering).
 
 The upstream bundle at `D:\03_Godot\GodotFlightDeck-1.6.0-Windows` is left untouched.
 
@@ -16,12 +16,12 @@ AssignProcessToJobObject: (50) 不支持该请求
 
 and hangs — even for `gdeck version`.
 
-## Cursor-specific changes
+## Fork changes (agent-shell compatible)
 
 1. **Default `GDECK_CURSOR_COMPAT=1`** (set `=0` to restore upstream supervisor behavior).
 2. Skip the outer `superviseCliInvocation` and run `main()` in-process.
 3. `runSync` uses direct `spawnSync` (with timeout) instead of nesting another `process-runner`.
-4. Launcher: `bin\gdeck-cursor.cmd` / `bin\gdeck-cursor.mjs` sets `GODOT_BIN` default to Godot 4.7.1.
+4. Launcher: `bin\gdeck.cmd` / `bin\gdeck.mjs` sets `GODOT_BIN` default to Godot 4.7.1.
 5. **Windows export-template detection**: `templateDirectories()` includes `%APPDATA%\Godot\export_templates`.
 6. **Cold import** temporarily disables only the Flight Deck Editor plugin, then atomically restores `project.godot`.
 7. **Scenario ergonomics**: `--trace-events`, `wait_event.since: "command"`, `includeHistory`, static lint warnings.
@@ -46,7 +46,7 @@ Prefer budget `worstFrameMsLte` for new performance gates.
 ## Quick use (from any Godot project)
 
 ```powershell
-$gdeck = "D:\03_Godot\04_Tools\GodotFlightDeck-Cursor\bin\gdeck-cursor.cmd"
+$gdeck = "D:\03_Godot\04_Tools\GodotFlightDeck\bin\gdeck.cmd"
 & $gdeck version
 & $gdeck doctor .
 & $gdeck check .
@@ -94,4 +94,4 @@ In `.gdeck/config.json`:
 
 Personal skill: `C:\Users\HYMOD\.cursor\skills\godot-flight-deck-cursor\SKILL.md`
 
-See also `CHANGELOG-CURSOR.md`.
+See also `CHANGELOG-FORK.md`.

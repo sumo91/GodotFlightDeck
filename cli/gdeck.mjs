@@ -2357,12 +2357,12 @@ const ORACLE_CHAIN_SCRIPTS = [
 function oracleVerify(projectCandidate, options) {
   const project = resolveProject(projectCandidate);
   let packageFile = join(project, 'package.json');
-  let cursor = project;
+  let dir = project;
   while (!existsSync(packageFile)) {
-    const parent = dirname(cursor);
-    if (parent === cursor) throw new Error(`oracle-verify requires the repository package.json (searched from ${project})`);
-    cursor = parent;
-    packageFile = join(cursor, 'package.json');
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error(`oracle-verify requires the repository package.json (searched from ${project})`);
+    dir = parent;
+    packageFile = join(dir, 'package.json');
   }
   const repoRoot = dirname(packageFile);
   const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -5716,7 +5716,7 @@ async function main() {
 if (privateLifecycleRegistry()) {
   await main();
 } else if (cursorCompatEnabled()) {
-  // Cursor fork: prepare unit/verify bindings in-process, skip nested Job supervisors.
+  // Agent-shell compat (GDECK_CURSOR_COMPAT=1): prepare unit/verify bindings in-process, skip nested Job supervisors.
   process.exitCode = await runCursorCompatInvocation(process.argv.slice(2));
 } else {
   process.exitCode = await superviseCliInvocation(process.argv.slice(2));

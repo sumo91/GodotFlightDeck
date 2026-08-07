@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Cursor-friendly launcher for Godot Flight Deck.
+ * Agent-friendly launcher for Godot Flight Deck.
  * Sets compat defaults then loads cli/gdeck.mjs in-process (no nested Node spawn).
  */
 if (process.env.GDECK_CURSOR_COMPAT === undefined) {

@@ -1,7 +1,13 @@
-# Godot Flight Deck Cursor — Changelog
+# Godot Flight Deck — Fork Changelog
 
-Changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus Cursor-local ergonomics.
+Changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics.
 This fork is **not** a byte-identical upstream release.
+
+## 1.6.4 (rebrand)
+
+- [x] Rebrand to platform-neutral `GodotFlightDeck` (folder, package `godot-flight-deck`, launchers `bin/gdeck.cmd` / `bin/gdeck.mjs`)
+- [x] Docs renamed: `README-CURSOR.md` → `README-FORK.md`, `CHANGELOG-CURSOR.md` → `CHANGELOG-FORK.md`
+- [x] `GDECK_CURSOR_COMPAT` env and `cursor-compat-mode` doctor check keep their identifiers (semantics unchanged)
 
 ## Gap matrix (Phase 0)
 
