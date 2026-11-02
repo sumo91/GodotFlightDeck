@@ -12,17 +12,18 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import Ajv from "ajv";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   getCliCommand,
   getPiAction,
   getPiFamily,
-  CLI_OPTIONS,
   PI_FIELDS,
+  parseCliArguments,
 } from "../registry/commands.mjs";
 import { findGodotProject } from "../extensions/runtime.mjs";
 
@@ -49,7 +50,24 @@ const FLAG_FIELDS = new Set(["json", "watch", "apply", "debug", "force", "dry-ru
 // Fields whose CLI option name differs from the Pi field name.
 const FIELD_OPTION_NAMES = { warmupFrames: "warmup" };
 // Editor batch handling.
-const BATCH_FIELDS = new Set(["batchName", "operations", "commit"]);
+const BATCH_FIELDS = new Set(["name", "operations", "commit"]);
+
+const REQUIRED_FIELDS = {
+  "validate:scenario": ["name"],
+  "release:export": ["target"],
+  "editor:set": ["property", "value"],
+  "editor:create": ["className", "nodeName"],
+  "editor:delete": ["path"],
+  "editor:reorder": ["path", "index"],
+  "editor:resource-inspect": ["resource"],
+  "editor:resource-create": ["resourceClass", "resource"],
+  "editor:resource-set": ["resource", "property", "value"],
+  "editor:resource-delete": ["resource"],
+  "editor:resource-assign": ["path", "property", "resource"],
+  "editor:batch": ["operations"],
+  "scene:set": ["scene", "path", "property", "value"],
+  "scene:restore": ["path"],
+};
 
 // Batch preflight files written during the current tool call (cleaned in finally).
 const activeBatchFiles = [];
@@ -58,42 +76,56 @@ function fieldToOption(name) {
   return FIELD_OPTION_NAMES[name] ?? name;
 }
 
-function isOptionField(fieldName) {
-  return Boolean(CLI_OPTIONS[fieldToOption(fieldName)]);
-}
-
 /**
  * Build the gdeck CLI argv for a (family, action, params, project) invocation.
  */
-function buildCliArgs(family, actionName, params, project) {
+export function buildCliArgs(family, actionName, params, project) {
   const actionDef = getPiAction(family, actionName);
   if (!actionDef) throw new Error(`Unknown Flight Deck action: ${family}:${actionName}`);
   const cliCommand = getCliCommand(actionDef.cliCommand);
   if (!cliCommand) throw new Error(`Unknown Flight Deck command: ${actionDef.cliCommand}`);
 
+  for (const field of REQUIRED_FIELDS[`${family}:${actionName}`] ?? []) {
+    if (!Object.hasOwn(params, field) || params[field] === undefined || (field !== "value" && (params[field] === null || params[field] === ""))) {
+      throw new Error(`Missing required parameter for ${family}:${actionName}: ${field}`);
+    }
+  }
+  params = { ...params };
+  if (family === "editor" && ["inspect", "set"].includes(actionName)) params.path ??= ".";
+  if (family === "editor" && actionName === "create") params.parent ??= ".";
+  if (family === "run" && actionName === "watch") params.watch = true;
+
   const args = [actionDef.cliCommand];
-  if (cliCommand.actions) args.push(actionName); // nested action commands (editor/scene/templates)
+  const cliAction = actionDef.cliCommand === "templates" ? actionName.replace(/^templates-/, "") : actionName;
+  if (cliCommand.actions) args.push(cliAction);
+  const allowedOptions = new Set(cliCommand.actions?.[cliAction]?.options ?? cliCommand.options);
 
   const positional = [];
   const options = [];
   let batchFile = null;
   let batchCommit = false;
 
-  for (const fieldName of actionDef.parameters) {
+  const fields = new Set(actionDef.parameters);
+  if (allowedOptions.has("json")) fields.add("json");
+  if (family === "editor" && actionName !== "batch" && allowedOptions.has("apply")) fields.add("apply");
+  for (const fieldName of fields) {
     const value = params[fieldName];
-    if (value === undefined || value === null) continue;
-    if (BATCH_FIELDS.has(fieldName)) {
+    if (value === undefined || (value === null && fieldName !== "value")) continue;
+    if (family === "editor" && actionName === "batch" && BATCH_FIELDS.has(fieldName)) {
       if (fieldName === "operations") {
-        batchFile = join(tmpdir(), `gdeck-mcp-batch-${process.pid}-${Date.now()}.json`);
-        writeFileSync(batchFile, `${JSON.stringify({ name: params.batchName ?? "mcp-batch", operations: value }, null, 2)}\n`, { encoding: "utf8" });
-        activeBatchFiles.push(batchFile);
+        const batchDirectory = mkdtempSync(join(tmpdir(), "gdeck-mcp-batch-"));
+        activeBatchFiles.push(batchDirectory);
+        batchFile = join(batchDirectory, "batch.json");
+        writeFileSync(batchFile, `${JSON.stringify({ name: params.name ?? "mcp-batch", operations: value }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
       } else if (fieldName === "commit") {
         batchCommit = value === true;
       }
       continue;
     }
-    if (isOptionField(fieldName)) {
-      const optionName = fieldToOption(fieldName);
+    const optionName = fieldToOption(fieldName);
+    // An init timeout bounds the MCP child process; init has no --timeout option.
+    if (fieldName === "timeout" && !allowedOptions.has(optionName)) continue;
+    if (allowedOptions.has(optionName)) {
       if (FLAG_FIELDS.has(optionName)) {
         if (value === true) options.push(`--${optionName}`);
       } else {
@@ -109,17 +141,24 @@ function buildCliArgs(family, actionName, params, project) {
     options.push(batchCommit ? "--apply" : "--dry-run");
   }
   if (project) positional.push(project);
-  return [...args, ...positional, ...options];
+  // Protect negative JSON numbers and option-like node names. For `run`, --
+  // starts game arguments instead, so its absolute project path stays before it.
+  const result = cliCommand.passthrough
+    ? [...args, ...positional, ...options]
+    : [...args, ...options, "--", ...positional];
+  // Catch contract drift before starting a process or touching the project.
+  parseCliArguments(result);
+  return result;
 }
 
 /**
  * Convert a PI field definition to a JSON Schema property.
  */
-function fieldToJsonSchema(fieldName) {
+export function fieldToJsonSchema(fieldName) {
   const definition = PI_FIELDS[fieldName];
   if (!definition) return { type: "string" };
   const schema = {};
-  if (definition.kind === "integer" || definition.kind === "number") schema.type = "number";
+  if (definition.kind === "integer" || definition.kind === "number") schema.type = definition.kind;
   else if (definition.kind === "boolean") schema.type = "boolean";
   else if (definition.kind === "enum") {
     schema.type = "string";
@@ -127,10 +166,10 @@ function fieldToJsonSchema(fieldName) {
   } else if (definition.kind === "operations") {
     schema.type = "array";
     schema.items = { type: "object" };
-  } else {
+  } else if (definition.kind !== "any") {
     schema.type = "string";
   }
-  for (const key of ["description", "minimum", "maximum", "minLength", "maxLength", "pattern"]) {
+  for (const key of ["description", "minimum", "maximum", "minLength", "maxLength", "pattern", "minItems", "maxItems"]) {
     if (definition[key] !== undefined) schema[key] = definition[key];
   }
   return schema;
@@ -145,7 +184,11 @@ function familyInputSchema(family) {
     const fieldName = typeof entry === "string" ? entry : entry.field;
     properties[publicName] = fieldToJsonSchema(fieldName);
   }
-  return { type: "object", properties, additionalProperties: false };
+  if (family.toolName === "gdeck_editor") {
+    properties.apply = fieldToJsonSchema("apply");
+    properties.json = fieldToJsonSchema("json");
+  }
+  return { type: "object", properties, required: ["action"], additionalProperties: false };
 }
 
 function executeCli(args, timeoutSeconds) {
@@ -175,10 +218,10 @@ function formatResult(actionName, project, result) {
   };
 }
 
-function cleanupBatchFiles() {
+export function cleanupBatchFiles() {
   while (activeBatchFiles.length > 0) {
     const file = activeBatchFiles.pop();
-    try { rmSync(file, { force: true }); } catch { /* bounded cleanup */ }
+    try { rmSync(file, { recursive: true, force: true }); } catch { /* bounded cleanup */ }
   }
 }
 
@@ -205,6 +248,7 @@ async function handleFamilyCall(familyName, params) {
   }
 
   try {
+    validateToolArguments(familyName, params);
     if (familyName === "project" && actionName === "detect") {
       const project = resolveProject(params.project);
       return { content: [{ type: "text", text: `Godot project detected: ${project}` }] };
@@ -233,7 +277,7 @@ const server = new Server(
 
 const FAMILY_NAMES = ["project", "validate", "release", "editor", "scene", "run"];
 
-const toolDefs = FAMILY_NAMES.map((familyName) => {
+export const toolDefs = FAMILY_NAMES.map((familyName) => {
   const family = getPiFamily(familyName);
   return {
     name: family.toolName,
@@ -242,6 +286,15 @@ const toolDefs = FAMILY_NAMES.map((familyName) => {
     inputSchema: familyInputSchema(family),
   };
 });
+
+const ajv = new Ajv({ allErrors: true, strict: false });
+const validators = new Map(toolDefs.map((tool) => [tool.name, ajv.compile(tool.inputSchema)]));
+export function validateToolArguments(familyName, params) {
+  const validate = validators.get(getPiFamily(familyName)?.toolName);
+  if (!validate || !validate(params)) {
+    throw new Error(`Invalid ${familyName} arguments: ${validate ? ajv.errorsText(validate.errors) : "unknown tool family"}`);
+  }
+}
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefs }));
 
@@ -254,5 +307,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   return handleFamilyCall(familyName, args ?? {});
 });
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}

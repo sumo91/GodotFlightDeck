@@ -3,6 +3,15 @@
 Changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics.
 This fork is **not** a byte-identical upstream release.
 
+## Unreleased — MCP compatibility fixes
+
+- Match MCP arguments to the CLI contract: init timeouts stay in the MCP supervisor, template actions use their CLI names, and runtime profiles remain positional.
+- Preserve JSON property types and negative values; supply root-node defaults when optional editor paths are omitted.
+- Preserve batch names in private temporary files; expose explicit `apply` for destructive operations and keep preview as the batch default.
+- Validate input schemas and required operands before execution; forward supported JSON output flags and activate watch mode from its action.
+- Insert coordinator-generated verify/unit report options before `--`, preserving argument boundaries during the second CLI parse.
+- Add contract tests and an isolated real-Godot MCP smoke test covering verification, unit execution, property writes, batch preview/commit, undo and explicit deletion. See `mcp/README.md`.
+
 ## 1.6.5 (Codex + ZCode integration)
 
 - [x] `GDECK_CODEX_DIRECT=1` now selects the same in-process direct mode as `GDECK_CURSOR_COMPAT=1` — the Codex fork (1.6.0) is unified into this single fork and retired

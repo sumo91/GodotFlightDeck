@@ -5402,6 +5402,14 @@ function startUnitProgressObserver(targets, render = (line) => console.error(lin
   };
 }
 
+function insertInvocationOptions(rawArguments, options) {
+  // Preserve the caller's end-of-options marker. Coordinator-generated flags
+  // must remain options when the invocation is parsed again by main().
+  const separator = rawArguments.indexOf('--');
+  const insertion = separator < 0 ? rawArguments.length : separator;
+  return [...rawArguments.slice(0, insertion), ...options, ...rawArguments.slice(insertion)];
+}
+
 async function prepareCoordinatedInvocation(rawArguments) {
   if (rawArguments.some((argument) => argument.startsWith('--gdeck-internal-invocation-identity=')
     || argument.startsWith('--gdeck-internal-verify-plan-digest=')
@@ -5427,12 +5435,11 @@ async function prepareCoordinatedInvocation(rawArguments) {
       invocationIdentity,
     });
     coordinatedVerificationPlan = plan;
-    coordinatedArguments = [
-      ...rawArguments,
+    coordinatedArguments = insertInvocationOptions(rawArguments, [
       ...(parsed.options.output === undefined ? ['--output', outputPath] : []),
       `--gdeck-internal-verify-plan-digest=${plan.digest}`,
       `--gdeck-internal-invocation-identity=${invocationIdentity}`,
-    ];
+    ]);
     timeoutMs = verificationPlanExecutionBudgetMilliseconds(plan);
   } else if (rawArguments[0] === 'unit') {
     const parsed = parseCliArguments(rawArguments);
@@ -5449,11 +5456,10 @@ async function prepareCoordinatedInvocation(rawArguments) {
       ownerNonce,
     });
     coordinatedUnit = { project, report, binding, verbosity: normalizeVerbosity(parsed.options.verbosity, 'compact') };
-    coordinatedArguments = [
-      ...rawArguments,
+    coordinatedArguments = insertInvocationOptions(rawArguments, [
       ...(parsed.options.output === undefined ? ['--output', report] : []),
       `--gdeck-internal-unit-binding=${Buffer.from(JSON.stringify(binding)).toString('base64url')}`,
-    ];
+    ]);
     timeoutMs = cliInvocationBudgetMilliseconds(coordinatedArguments);
   } else {
     timeoutMs = cliInvocationBudgetMilliseconds(coordinatedArguments);

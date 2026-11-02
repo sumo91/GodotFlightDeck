@@ -83,6 +83,11 @@ Extension 只能操作包含 Pi 当前工作目录的可信 Godot 项目。确�
 
 `generated-write`（原子替换项目声明的生成构建路径）和普通 `project-write` 默认使用 120 秒的内存 approval lease，包括内部 `export`、包含配置导出的 `verify`、`init`、`export-init` 以及非删除的常规 Editor 写操作。lease 只在已确认操作成功后创建，精确绑定当前真实项目路径、tool family/action 和规范化 effect scope（例如导出目标或 Editor 节点/属性/值）；失败会撤销已复用的 lease，session 结束也会全部清除。项目可将其配置为 `0` 完全禁用。视觉基准、节点/资源删除、committed batch、stale Editor-session 清理等 `destructive` 操作，以及模板安装这类 `host-write` 永不使用 lease。一次 `verify` 对内部 Verification Plan 声明的全部导出影响只显示一个聚合确认；确认和 lease scope 均绑定该 Plan 的语义与目标路径。确认后若配置、测试发现、scenario、baseline、fixture adapter 或导出目的地使 Plan 发生变化，执行会在启动前中止并要求重新预检。`gdeck_editor batch` 默认只执行 dry-run，只有显式设置 `commit: true` 并确认后才提交。Extension 不暴露正式发布参数。验证报告保存在项目 `.gdeck/reports/`；Pi 的第一次结果始终先返回有界 Result Envelope，再返回兼容的、仅使用结构化证据的 failure-first 摘要。Envelope 给出 profile/legacy 策略、`PASSED` / `FAILED` / `INCONCLUSIVE` / `CANCELLED` Verdict、完整 coverage、决定性阶段、证据优先的 failure classification、可得的 expected/actual、产物路径和确定性下一步；Pi 不把可能含 fixture/save/token 的 verify 原始输出复制进第一次结果，而是写入权限受限的完整日志并明确给出路径。非 verify 命令的日志若被截断，也会明确披露并给出完整日志路径。失败的 unit、scenario 和 verify 都会在处理非零退出码前读取精确报告。
 
+## MCP 集成
+
+Codex、ZCode 等 MCP 客户端可以通过 `mcp/server.mjs` 使用六组 `gdeck_*` 工具。
+依赖安装、连接重启和回归测试命令见 [MCP server 文档](mcp/README.md)。
+
 ## 命令
 
 CLI、Pi Tool Schema、参数白名单、确认策略与帮助信息共享 `registry/commands.mjs` 中的声明式契约。CLI 会在解析阶段拒绝未知选项或用于错误命令的已知选项，并列出当前命令允许的参数；只有 `gdeck run ... -- <game arguments>` 允许任意游戏参数透传。
