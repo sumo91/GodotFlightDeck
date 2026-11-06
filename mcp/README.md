@@ -61,6 +61,9 @@ deadline greater than execution plus cleanup (e.g. timeout + 30 seconds).
 package version, implementation build fingerprint, MCP schema version, PID and
 process start time. The MCP initialize version also includes the build prefix.
 Reconnect after an update and compare the identity; an old server keeps old code.
+If detection has no service identity or validation still returns raw text without
+`structuredContent`, the connection has not demonstrated schema 2 support. Reconnect
+and check detection again; a passing CLI run alone does not verify the MCP update.
 
 To test this source checkout through a fresh structured MCP session, without
 changing the installed server, save a normal MCP request as JSON and run:
