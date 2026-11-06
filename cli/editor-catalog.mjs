@@ -196,7 +196,7 @@ export const HELP_DOMAINS = Object.freeze({
       'gdeck verify <project> --profile <name>',
       'gdeck evidence-index <project>',
     ],
-    when: 'After code/scene changes, or before claiming a fix works. Does not require Godot Editor UI.',
+    when: 'Choose the check or profile relevant to the changed behavior and project acceptance scope. Does not require Godot Editor UI.',
   },
   editor: {
     summary: 'Live Godot Editor Bridge (project must be open in Editor)',

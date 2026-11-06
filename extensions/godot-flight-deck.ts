@@ -787,7 +787,7 @@ export default function godotFlightDeckExtension(pi: ExtensionAPI) {
     label: "Godot Flight Deck Project",
     description: "Detect, initialize, or diagnose the active trusted Godot project using structured Flight Deck operations.",
     promptSnippet: "Detect, initialize, and diagnose the active trusted Godot project",
-    promptGuidelines: ["Use gdeck_project doctor before broader Godot Flight Deck validation or setup changes."],
+    promptGuidelines: ["Use gdeck_project detect to locate the project; use doctor for environment diagnosis or setup changes."],
     parameters: ProjectParams,
     execute: (_id, params, signal, onUpdate, ctx) => executeFamily(pi, "project", params, signal, onUpdate, ctx),
   });
@@ -799,6 +799,7 @@ export default function godotFlightDeckExtension(pi: ExtensionAPI) {
     promptSnippet: "Run structured Godot checks, tests, scenarios, visuals, benchmarks, and verification",
     promptGuidelines: [
       "Use gdeck_validate instead of shell commands for Godot Flight Deck checks and tests.",
+      "Choose checks for the changed behavior and project acceptance scope; deliver after they pass unless new changes, failures or specific unresolved concerns need more validation.",
       "Use gdeck_validate baseline only after inspecting a visual failure and obtaining approval.",
     ],
     parameters: ValidateParams,

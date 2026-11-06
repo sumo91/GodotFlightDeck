@@ -75,3 +75,37 @@
 ## 1.6.6 版本同步
 
 按用户要求将本次反馈修订发布版本升级至 1.6.6。主包、MCP 包和 lockfile、plugin.cfg、插件入口、Editor Bridge、runtime probe、Unit 报告版本及当前版本文档一并同步；旧测试报告与历史补丁的 1.6.5 标识保持其原始事实。全局安装和 GreyRanger 项目插件/配置通过已安装 MCP 的事务更新，安装后版本一致性与 fast 结果记入 GreyRanger 验证文档。
+
+## 职责边界反馈复核（2026-11-06，1.6.6 发布后）
+
+接收 GreyRanger `docs/tooling/gdeck-agent-responsibility-boundaries.md` 后，按当前版本去重。目标是减少项目为工具承担的工作；本节不改写上文历史验证范围。
+
+### 入口与版本
+
+- 仓库 HEAD 为 `a4f0345`（1.6.6）；全局安装也为 1.6.6。两处 `mcp/server.mjs`、`cli/gdeck.mjs` 和 `scenario_runner.gd` SHA256 一致。
+- 对反馈中的原绝对项目路径，通过本聊天已连接 MCP 执行原请求 `verify / fast / timeout=900 / verbosity=compact`：**PASSED / none**，2/2，48.975 秒。没有复现 invocation identity 拒绝；该连接仍仅返回旧式文本，没有 `structuredContent` 或服务身份。
+- `9b1c01a` 已修复 MCP 生命周期监督标记导致 Unit/Verify 跳过协调初始化的路径。它能解释缺失 invocation identity 的症状，但没有原失败进程的版本/启动信息，不能据此追认那次失败的唯一原因。本次未添加运行时代码或游戏兼容分支。
+- 用正式随包 `mcp/call.mjs` 连接当前全局安装的新服务，在已提交 `70f0d9e277bf7137f1cfbe18a3e191ecd361c0f4` 的独立副本上运行同一 `fast` 请求：**PASSED / none**，2/2，123 项测试、4,943 断言，49.309 秒；退出 0，无超时、取消或清理超时。MCP 返回文本 **2,042 字符 / 2,042 字节**，含 schema 2 结构化结果；Envelope 与原 CLI 报告逐字段相等，invocation identity 为合法 64 位小写十六进制。响应归档 JSON 为 19,415 字节，不将文本上限混称为整个 JSON 上限。
+- 新服务版本 1.6.6，build `c21c88d50e0a160227d1cadad0857bb04af5104717fd23d193d7a69db7301bf4`，启动于北京时间 2026-11-06 23:34:48。副本保持提交中的 1.6.5 插件，未同步插件；扫描器 SHA256 `98989f85cbd3311f0ab5337b43526409fb3cacf582c7fde913e036b3e71b3d6f`，完整插件指纹在 `baseline.json`。此次 fast 证明新版工具与该基线的接口/绑定兼容，不重新证明事件扫描性能。
+- 原工作区未提交的职责文档保留，未修改任何游戏源码、QA、配置或项目 AGENTS。现存旧式 MCP 连接仍需重连才能取得新版呈现；新进程复验不代表其他聊天的连接已经更新。
+
+### 去重结论与本次最小变更
+
+| 反馈 | 当前处理结论 |
+| --- | --- |
+| F01 重复事件扫描 | 1.6.6 已有步骤内游标与累计匹配，既有语义/工作量和整合证据见上文；不重复实现。不声称长测全部耗时增长已定位。完整历史仍驻留内存，有界存储/流式落盘尚未实现。 |
+| F02 巨量 MCP 输出 | 1.6.6 已有 8 KiB 文本、有界结构化结果和按需日志；本次新会话 fast 复验通过。旧连接需重连。 |
+| F03/F04 参数、长调用及清理 | 已归并到正式版本。此次 Node 契约/输出/生命周期检查 47/47 通过，包括真实 CLI 参数解析、取消、断开、超时与后代清理。有限长 scenario 上限仍为 7,800 秒。 |
+| F05–F07 诊断、时钟、冻结范围 | 已有固定诊断类别、断言与退出分层、阶段耗时、两种时钟和漂移位置；本次未重复修改。历史 gameplay 超时的原始根因仍未还原。 |
+| 默认指引与停止条件 | 本次仅调整随包技能、Pi 提示和 CLI 帮助措辞：按改动与验收范围选择检查，相关检查通过后交付；纯文字查内容/链接，运行配置查对应路径；可选能力按需配置。Doctor 用于环境诊断和设置，不再作为所有较大验证的提示前置条件。补充 MCP 文档中的旧连接识别办法。 |
+| Agent/项目责任 | 玩法范围、架构、防御代码取舍、体验判断、验证选择与停止由项目/Agent 负责。仓库未发现随包 AGENTS 模板；GreyRanger 的“任何修改后 fast”来自该项目 AGENTS，本次不替换项目规则。不改音频生命周期、夜视规则、负载、预算或协作流程。 |
+
+### 可退役的项目过渡代码与验证边界
+
+项目采用 1.6.6 并重连确认服务身份后，`tools/gdeck-mcp/flight-deck-1.6.5.patch`、旧版 `manifest.json` 及应用/恢复流程可作为历史归档退役，不再应用到当前安装。项目专有 `scenario-client.mjs` 的新会话调用能力可由正式随包 `mcp/call.mjs` 替代，移除前更新调用说明；正式两小时调用仍须由支持该有限请求时长的客户端执行。这次只明确替代条件，不删除其他项目文件。游戏 QA 夹具和实际音频释放处理不属于这些可移除项。
+
+本次没有运行 campaign-expansion、短/正式长负载、audio-exit、Editor smoke、视觉或导出；运行代码未改，已有修订证据不冒充本次复验。两次 fast 的 Doctor、scenario、visual、benchmark、export 均未配置，0 skipped / 0 blocked。提示与文档改动做内容、语法和 diff 检查，不因此再次运行游戏 fast。
+
+原始请求/响应、服务身份、插件指纹、日志及精确报告归档在 `/Users/chaoliu/.codex/worktrees/campaign-main-merge/GreyRanger/.gdeck/reports/gdeck-feedback-followup-20261106/`。`summary.json` 记录新会话结果与报告哈希；`fresh-reports/` 保留原报告字节和原临时项目路径，仅为归档，不重新绑定到当前工作区。隔离副本准备曾因本机 Python 不支持 `tarfile` 的 `filter` 参数失败，改用已提交可信 Git archive 后成功；该准备失败没有启动游戏，不计入 GDeck Verdict。
+
+上述复核结束时，指引变更仅在 GDeck 工作区，尚未提交、推送或同步全局技能。后续提交与部署单独记录；本次没有新增自动重试、任务平台或防御性重构。
