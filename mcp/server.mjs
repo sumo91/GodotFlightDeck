@@ -13,10 +13,13 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import Ajv from "ajv";
-import { spawnSync } from "node:child_process";
+import { executeSupervised } from "./supervisor.mjs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, mkdirSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { formatResult, readLog, boundedText } from "./result.mjs";
+export { formatResult } from "./result.mjs";
 import { fileURLToPath } from "node:url";
 import {
   getCliCommand,
@@ -26,12 +29,25 @@ import {
   parseCliArguments,
 } from "../registry/commands.mjs";
 import { findGodotProject } from "../extensions/runtime.mjs";
+import { generateInvocationIdentity } from "../cli/evidence-contract.mjs";
+import { resolveVerificationPlan, verificationPlanSummary } from "../cli/verification-plan.mjs";
 
 const TOOL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI_FILE = join(TOOL_ROOT, "cli", "gdeck.mjs");
-const DEFAULT_TIMEOUT_SECONDS = 120;
-const MAX_TIMEOUT_SECONDS = 900;
-const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+export const DEFAULT_TIMEOUT_SECONDS = 120;
+export const MAX_TIMEOUT_SECONDS = 900;
+export const MAX_SCENARIO_TIMEOUT_SECONDS = 7800;
+export const SERVICE_INFO = Object.freeze({
+  name: "godot-flight-deck", version: JSON.parse(readFileSync(join(TOOL_ROOT, "package.json"), "utf8")).version,
+  schemaVersion: 2,
+  buildId: createHash("sha256").update(Buffer.concat([
+    "mcp/server.mjs", "mcp/result.mjs", "mcp/supervisor.mjs", "cli/gdeck.mjs", "registry/commands.mjs",
+    "godot/addons/flight_deck/scenario_runner.gd",
+    "godot/addons/flight_deck/runtime_probe.gd", "cli/process-runner.mjs", "cli/verification-plan.mjs",
+    "cli/plan-diagnostics.mjs", "cli/diagnostics.mjs", "cli/runtime-clock.mjs",
+  ].map(path => readFileSync(join(TOOL_ROOT, path))))).digest("hex"),
+  startedAt: new Date().toISOString(), processId: process.pid,
+});
 
 const MUTATION_WARNING =
   "Mutating actions (init, sync-addon, baseline, export-init, export, editor writes, scene set, batch) require explicit user approval before invocation. Destructive editor actions additionally need apply=true or commit=true.";
@@ -188,34 +204,36 @@ function familyInputSchema(family) {
     properties.apply = fieldToJsonSchema("apply");
     properties.json = fieldToJsonSchema("json");
   }
-  return { type: "object", properties, required: ["action"], additionalProperties: false };
+  const schema = { type: "object", properties, required: ["action"], additionalProperties: false };
+  if (family.toolName === "gdeck_validate") {
+    properties.timeout.maximum = MAX_SCENARIO_TIMEOUT_SECONDS;
+    properties.timeout.description = "Wall-clock seconds; default 120. Explicit scenario calls allow up to 7800; other actions allow up to 900.";
+    schema.allOf = [{
+      if: { properties: { action: { const: "scenario" } } },
+      else: { properties: { timeout: { maximum: MAX_TIMEOUT_SECONDS } } },
+    }];
+  }
+  return schema;
 }
 
-function executeCli(args, timeoutSeconds) {
-  const result = spawnSync(process.execPath, [CLI_FILE, ...args], {
-    cwd: TOOL_ROOT,
-    encoding: "utf8",
-    maxBuffer: MAX_OUTPUT_BYTES,
-    timeout: timeoutSeconds * 1000,
-    killSignal: "SIGTERM",
-    windowsHide: true,
+export function executionTimeoutSeconds(params) {
+  return Number(params.timeout ?? DEFAULT_TIMEOUT_SECONDS);
+}
+
+function executeCli(args, timeoutSeconds, signal, project) {
+  return executeSupervised(process.execPath, [CLI_FILE, ...args], {
+    cwd: TOOL_ROOT, timeoutSeconds, signal, lifecycleProjectRoots: [project],
   });
-  const timedOut = result.error?.code === "ETIMEDOUT";
-  const status = timedOut ? 124 : Number.isInteger(result.status) ? result.status : 127;
-  return { status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? ""), timedOut };
 }
 
-function formatResult(actionName, project, result) {
-  const lines = [];
-  if (result.stdout.trim()) lines.push(result.stdout.trimEnd());
-  if (result.stderr.trim()) lines.push(result.stderr.trimEnd());
-  if (result.timedOut) lines.push(`gdeck ${actionName}: timed out after the configured window (exit 124)`);
-  else if (result.status !== 0) lines.push(`gdeck ${actionName}: exit code ${result.status}`);
-  const text = lines.join("\n");
-  return {
-    content: [{ type: "text", text: text || `gdeck ${actionName}: completed (no output)` }],
-    isError: result.status !== 0,
-  };
+export function withReportArgument(args, action, reportPath) {
+  if (!reportPath) return args;
+  const flag = action === "scenario" ? "--report" : "--output";
+  const separator = args.indexOf("--");
+  const insertion = separator < 0 ? args.length : separator;
+  const result = [...args.slice(0, insertion), flag, reportPath, ...args.slice(insertion)];
+  parseCliArguments(result);
+  return result;
 }
 
 export function cleanupBatchFiles() {
@@ -236,13 +254,14 @@ function resolveProject(requestedPath) {
   return project;
 }
 
-async function handleFamilyCall(familyName, params) {
+async function handleFamilyCall(familyName, params, signal, onPlan) {
   const family = getPiFamily(familyName);
   const actionName = params.action;
   const actionDef = getPiAction(familyName, actionName);
   if (!family || !actionDef) {
     return {
-      content: [{ type: "text", text: `Unknown Flight Deck action: ${familyName}:${actionName}` }],
+      content: [{ type: "text", text: `Unknown Flight Deck action for ${familyName}` }],
+      structuredContent: { schemaVersion: 1, action: { family: familyName, status: "rejected" }, service: SERVICE_INFO },
       isError: true,
     };
   }
@@ -251,18 +270,34 @@ async function handleFamilyCall(familyName, params) {
     validateToolArguments(familyName, params);
     if (familyName === "project" && actionName === "detect") {
       const project = resolveProject(params.project);
-      return { content: [{ type: "text", text: `Godot project detected: ${project}` }] };
+      return { content: [{ type: "text", text: `Godot project detected: ${project}\nService ${SERVICE_INFO.version}; schema ${SERVICE_INFO.schemaVersion}; build ${SERVICE_INFO.buildId}; started ${SERVICE_INFO.startedAt}` }],
+        structuredContent: { schemaVersion: 1, project, service: SERVICE_INFO } };
     }
     const project = resolveProject(params.project);
-    const args = buildCliArgs(familyName, actionName, params, project);
-    const timeoutSeconds = Math.min(
-      Math.max(Number(params.timeout ?? DEFAULT_TIMEOUT_SECONDS), 1),
-      MAX_TIMEOUT_SECONDS,
-    );
-    return formatResult(actionName, project, executeCli(args, timeoutSeconds));
+    let args = buildCliArgs(familyName, actionName, params, project);
+    let reportPath = "";
+    if (familyName === "validate" && ["verify", "unit", "scenario"].includes(actionName)) {
+      const directory = join(project, ".gdeck", "reports");
+      mkdirSync(directory, { recursive: true });
+      reportPath = join(directory, `${actionName}-mcp-${randomUUID()}.json`);
+      args = withReportArgument(args, actionName, reportPath);
+    }
+    const timeoutSeconds = executionTimeoutSeconds(params);
+    if (familyName === "validate" && actionName === "verify") {
+      const invocationIdentity = generateInvocationIdentity();
+      const plan = resolveVerificationPlan({ project, outputPath: reportPath, timeoutSeconds,
+        verificationProfile: params.profile, invocationIdentity });
+      const insertion = args.indexOf("--");
+      const index = insertion < 0 ? args.length : insertion;
+      args.splice(index, 0, `--gdeck-internal-verify-plan-digest=${plan.digest}`, `--gdeck-internal-invocation-identity=${invocationIdentity}`);
+      await onPlan?.(verificationPlanSummary(plan));
+    }
+    return formatResult(actionName, project, await executeCli(args, timeoutSeconds, signal, project),
+      { family: familyName, reportPath, verbosity: params.verbosity, service: SERVICE_INFO });
   } catch (error) {
     return {
-      content: [{ type: "text", text: `gdeck ${actionName}: ${error instanceof Error ? error.message : String(error)}` }],
+      content: [{ type: "text", text: boundedText(`gdeck ${actionName}: ${error instanceof Error ? error.message : String(error)}`) }],
+      structuredContent: { schemaVersion: 1, action: { family: familyName, name: actionName, status: "rejected" }, service: SERVICE_INFO },
       isError: true,
     };
   } finally {
@@ -271,7 +306,7 @@ async function handleFamilyCall(familyName, params) {
 }
 
 const server = new Server(
-  { name: "godot-flight-deck", version: "1.6.5" },
+  { name: SERVICE_INFO.name, version: `${SERVICE_INFO.version}+${SERVICE_INFO.buildId.slice(0, 12)}` },
   { capabilities: { tools: {} } },
 );
 
@@ -289,6 +324,14 @@ export const toolDefs = FAMILY_NAMES.map((familyName) => {
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validators = new Map(toolDefs.map((tool) => [tool.name, ajv.compile(tool.inputSchema)]));
+const logTool = {
+  name: "gdeck_log", description: "Read captured output from this MCP session by log ID and byte offset. Base64 pages preserve exact bytes; SHA256 covers the complete captured stream. Never executes or retries a command.",
+  inputSchema: { type: "object", additionalProperties: false, required: ["logId"], properties: {
+    logId: { type: "string", maxLength: 36 }, stream: { type: "string", enum: ["stdout", "stderr"] },
+    offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 32768 },
+  } },
+};
+const validateLog = ajv.compile(logTool.inputSchema);
 export function validateToolArguments(familyName, params) {
   const validate = validators.get(getPiFamily(familyName)?.toolName);
   if (!validate || !validate(params)) {
@@ -296,18 +339,48 @@ export function validateToolArguments(familyName, params) {
   }
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefs }));
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...toolDefs, logTool] }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+// Preserve the previous single-call mutation/batch lifetime while execution is async.
+let callQueue = Promise.resolve();
+const activeCalls = new Set();
+server.onclose = () => { for (const controller of activeCalls) controller.abort(); };
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const { name, arguments: args } = request.params;
+  if (name === "gdeck_log") {
+    try {
+      if (!validateLog(args ?? {})) throw new Error(`Invalid log arguments: ${ajv.errorsText(validateLog.errors)}`);
+      const page = readLog(args);
+      return { content: [{ type: "text", text: `Captured ${page.stream}: bytes ${page.offset}..${page.nextOffset} of ${page.totalBytes}; eof=${page.eof}. Exact bytes are in structuredContent.data (base64).` }], structuredContent: page };
+    } catch (error) { return { content: [{ type: "text", text: boundedText(error.message) }], isError: true }; }
+  }
   const familyName = FAMILY_NAMES.find((key) => getPiFamily(key).toolName === name);
   if (!familyName) {
-    return { content: [{ type: "text", text: `Unknown Flight Deck tool: ${name}` }], isError: true };
+    return { content: [{ type: "text", text: "Unknown Flight Deck tool" }], isError: true };
   }
-  return handleFamilyCall(familyName, args ?? {});
+  const controller = new AbortController();
+  activeCalls.add(controller);
+  const abort = () => controller.abort();
+  extra.signal.addEventListener("abort", abort, { once: true });
+  if (extra.signal.aborted) abort();
+  const progressToken = request.params._meta?.progressToken;
+  const onPlan = progressToken === undefined ? undefined : async plan => {
+    try {
+      await extra.sendNotification({ method: "notifications/progress", params: {
+        progressToken, progress: 0, total: 1, message: boundedText(`Verification plan frozen: ${JSON.stringify(plan)}`, 6144),
+      } });
+    } catch { /* Presentation delivery never changes execution or evidence. */ }
+  };
+  const pending = callQueue.then(() => handleFamilyCall(familyName, args ?? {}, controller.signal, onPlan)).finally(() => {
+    activeCalls.delete(controller);
+    extra.signal.removeEventListener("abort", abort);
+  });
+  callQueue = pending.catch(() => {});
+  return pending;
 });
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  process.stdin.once("end", () => server.close());
 }

@@ -1,12 +1,26 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildCliArgs, cleanupBatchFiles, fieldToJsonSchema, toolDefs, validateToolArguments } from './server.mjs';
+import { buildCliArgs, cleanupBatchFiles, fieldToJsonSchema, toolDefs, validateToolArguments, executionTimeoutSeconds, withReportArgument, SERVICE_INFO } from './server.mjs';
 import { parseCliArguments } from '../registry/commands.mjs';
 
 const project = '/tmp/flight deck test project';
 const parse = (family, action, params = {}) => parseCliArguments(buildCliArgs(family, action, params, project));
 afterEach(cleanupBatchFiles);
+
+test('MCP report operands survive the CLI option boundary', () => {
+  for (const action of ['unit', 'verify', 'scenario']) {
+    const parsed = parseCliArguments(withReportArgument(buildCliArgs('validate', action, { name: 'example' }, project), action, '/tmp/report.json'));
+    assert.equal(parsed.options[action === 'scenario' ? 'report' : 'output'], '/tmp/report.json');
+    assert.equal(parsed.positional.at(-1), project);
+  }
+});
+
+test('service identity exposes build, schema and process start', () => {
+  assert.match(SERVICE_INFO.buildId, /^[a-f0-9]{64}$/);
+  assert.equal(SERVICE_INFO.schemaVersion, 2);
+  assert.ok(Number.isFinite(Date.parse(SERVICE_INFO.startedAt)));
+});
 
 test('init timeout belongs to the MCP supervisor, not init argv', () => {
   const parsed = parse('project', 'init', { timeout: 30 });
@@ -100,4 +114,36 @@ test('missing required operands cannot shift later values into another argument'
   assert.throws(() => parse('editor', 'set', { property: 'visible' }), /Missing required.*value/);
   assert.throws(() => parse('editor', 'delete'), /Missing required.*path/);
   assert.throws(() => parse('editor', 'batch', { name: 'Incomplete' }), /Missing required.*operations/);
+});
+
+
+test('only an explicit scenario may extend the 120-second default to 7800 seconds', () => {
+  assert.equal(executionTimeoutSeconds({}), 120);
+  assert.equal(executionTimeoutSeconds({ timeout: 7800 }), 7800);
+  for (const timeout of [901, 7200, 7800]) {
+    assert.doesNotThrow(() => validateToolArguments('validate', { action: 'scenario', name: 'soak', timeout }));
+    assert.equal(parse('validate', 'scenario', { name: 'soak', timeout }).options.timeout, String(timeout));
+  }
+  for (const timeout of [0, 7800.1, 86400, Infinity, NaN]) {
+    assert.throws(() => validateToolArguments('validate', { action: 'scenario', name: 'soak', timeout }), /Invalid/);
+  }
+  for (const action of ['check', 'unit', 'verify', 'benchmark', 'baseline', 'visual', 'oracle']) {
+    assert.throws(() => validateToolArguments('validate', { action, timeout: 901 }), /Invalid/);
+  }
+  for (const family of ['project', 'editor', 'scene', 'release', 'run']) {
+    const definition = toolDefs.find(tool => tool.name === `gdeck_${family}`);
+    if (definition.inputSchema.properties.timeout) assert.equal(definition.inputSchema.properties.timeout.maximum, 900);
+  }
+});
+
+test('long scenario changes neither fixture selection nor public trust/mutation fields', () => {
+  const parsed = parse('validate', 'scenario', { name: 'soak', profile: 'isolated-soak', timeout: 7500 });
+  assert.deepEqual(parsed.positional, ['soak', project]);
+  assert.equal(parsed.options.profile, 'isolated-soak');
+  assert.equal(parsed.options.timeout, '7500');
+  assert.equal(parsed.options.apply, undefined);
+  assert.deepEqual(parsed.passthrough, []);
+  for (const key of ['env', 'godot', 'userArgs', 'apply', 'force', 'skipIsolation']) {
+    assert.throws(() => validateToolArguments('validate', { action: 'scenario', name: 'soak', timeout: 7500, [key]: true }), /Invalid/);
+  }
 });

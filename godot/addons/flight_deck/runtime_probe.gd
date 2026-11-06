@@ -42,6 +42,14 @@ var semantic_events: Array[Dictionary] = []
 var scenario_runner: FlightDeckScenarioRunner
 var query_definitions: Array[Dictionary] = []
 var query_results: Array[Dictionary] = []
+var clock_started_usec := 0
+var clock_sampling_started_usec := 0
+var clock_fixed_fps := -1
+var clock_simulation_seconds := 0.0
+var clock_fixture_setup_usec := 0
+var clock_command_dispatch_usec := 0
+var clock_performance_sampling_usec := 0
+var clock_scenario_tick_usec := 0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -50,6 +58,7 @@ func _ready() -> void:
 	if target_frames < 0:
 		set_process(false)
 		return
+	_configure_clock(OS.get_cmdline_user_args())
 	if not scenario_path.is_empty():
 		scenario_runner = FlightDeckScenarioRunner.new()
 		if not scenario_runner.load_file(scenario_path):
@@ -69,16 +78,26 @@ func _process(delta: float) -> void:
 		return
 	current_frame += 1
 	var now_usec := Time.get_ticks_usec()
+	if clock_started_usec == 0:
+		clock_started_usec = now_usec
+	clock_simulation_seconds += delta
 	var frame_ms := 0.0
+	var previous_process_usec := last_process_usec
 	if last_process_usec > 0:
 		frame_ms = float(now_usec - last_process_usec) / 1000.0
 	last_process_usec = now_usec
 	var sampling_starts_after := benchmark_warmup_frames if benchmark_enabled else 5
 	# Warmup may be zero; require a prior _process tick so frame_ms is a real interval.
 	if current_frame > sampling_starts_after and last_process_usec > 0 and frame_ms > 0.0:
+		if clock_sampling_started_usec == 0:
+			clock_sampling_started_usec = previous_process_usec
+		var sampling_started := Time.get_ticks_usec()
 		_sample_performance(delta, frame_ms)
+		clock_performance_sampling_usec += Time.get_ticks_usec() - sampling_started
 	if scenario_runner != null:
+		var scenario_started := Time.get_ticks_usec()
 		scenario_runner.tick(self)
+		clock_scenario_tick_usec += Time.get_ticks_usec() - scenario_started
 		if scenario_runner.status == "passed":
 			event("scenario_completed", {"status": "passed"})
 			finishing = true
@@ -116,7 +135,50 @@ func run_seed() -> int:
 
 func issue_command(command_name: String, payload: Dictionary = {}) -> void:
 	event("scenario_command", {"command": command_name, "payload": payload})
+	var started_usec := Time.get_ticks_usec()
 	command_requested.emit(command_name, payload)
+	clock_command_dispatch_usec += Time.get_ticks_usec() - started_usec
+
+func _configure_clock(args: PackedStringArray) -> void:
+	clock_started_usec = Time.get_ticks_usec()
+	clock_fixed_fps = -1
+	for argument in args:
+		if argument.begins_with("--gdeck-fixed-fps="):
+			var value := argument.trim_prefix("--gdeck-fixed-fps=")
+			if value.is_valid_int():clock_fixed_fps = maxi(-1, int(value))
+
+func _clock_report() -> Dictionary:
+	var end_usec := maxi(clock_started_usec, last_process_usec)
+	var wall_seconds := float(end_usec - clock_started_usec) / 1000000.0
+	var sampling_seconds := float(end_usec - clock_sampling_started_usec) / 1000000.0 if clock_sampling_started_usec > 0 else 0.0
+	return {
+		"mode": "fixed_step_throughput" if clock_fixed_fps > 0 else "real_time" if clock_fixed_fps == 0 else "unknown",
+		"mode_source": "gdeck_launch_metadata" if clock_fixed_fps >= 0 else "unspecified",
+		"clock": "monotonic",
+		"scope": "probe_process_ticks",
+		"fixed_fps": clock_fixed_fps if clock_fixed_fps > 0 else null,
+		"fixed_step_seconds": 1.0 / clock_fixed_fps if clock_fixed_fps > 0 else null,
+		"simulation_seconds": clock_simulation_seconds,
+		"simulation_source": "sum_process_delta",
+		"wall_seconds": wall_seconds,
+		"warmup_wall_seconds": wall_seconds - sampling_seconds,
+		"sampling_wall_seconds": sampling_seconds,
+		"simulation_to_wall_ratio": clock_simulation_seconds / wall_seconds if wall_seconds > 0.0 else null,
+		"project_game_speed": "project_defined_not_inferred",
+		"window_note": "Probe frame warmup/sampling; project fixture wall-clock windows are separate. Startup before probe activation and capture/exit are excluded.",
+		"fixture_control": {
+			"measurement": "synchronous_callbacks_only",
+			"setup_seconds": float(clock_fixture_setup_usec) / 1000000.0,
+			"command_dispatch_seconds": float(clock_command_dispatch_usec) / 1000000.0,
+			"async_continuations_measured": false,
+		},
+		"probe_work": {
+			"performance_sampling_seconds": float(clock_performance_sampling_usec) / 1000000.0,
+			"scenario_tick_seconds": float(clock_scenario_tick_usec) / 1000000.0,
+			"scenario_tick_includes_command_dispatch": true,
+			"total_overhead_measured": false,
+		},
+	}
 
 func find_semantic_event(event_name: String, where: Dictionary = {}, from_index: int = 0) -> int:
 	for index in range(maxi(0, from_index), semantic_events.size()):
@@ -376,7 +438,9 @@ func _load_fixture_adapter() -> bool:
 	fixture_adapter = candidate
 	add_child(fixture_adapter)
 	if fixture_adapter.has_method("gdeck_setup"):
+		var setup_started := Time.get_ticks_usec()
 		fixture_adapter.call("gdeck_setup", self)
+		clock_fixture_setup_usec += Time.get_ticks_usec() - setup_started
 	return true
 
 func _fixture_adapter_path_is_safe(path: String) -> bool:
@@ -496,6 +560,7 @@ func _write_report(capture_error: Error) -> void:
 		"project": ProjectSettings.get_setting("application/config/name", "Unnamed"),
 		"frames": sample_count if benchmark_enabled else current_frame,
 		"total_frames": current_frame,
+		"clocks": _clock_report(),
 		"capture": capture_path,
 		"capture_error": capture_error,
 		"benchmark": benchmark_enabled,

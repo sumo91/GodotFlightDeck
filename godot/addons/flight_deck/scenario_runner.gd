@@ -8,6 +8,8 @@ var assertions: Array = []
 var current_step := 0
 var step_frame := 0
 var step_event_offset := 0
+var step_event_cursor := 0
+var step_event_matches := 0
 var preserve_event_offset_for_next_wait := false
 var status := "idle"
 var failure := ""
@@ -55,6 +57,8 @@ func tick(probe: Node) -> void:
 		return
 	if step_frame == 0:
 		_begin_step_window(probe, step)
+		step_event_cursor = step_event_offset
+		step_event_matches = 0
 		probe.event("scenario_step_started", {"index": current_step, "step": step})
 
 	if step.has("wait_frames"):
@@ -132,7 +136,11 @@ func tick(probe: Node) -> void:
 		var where: Dictionary = where_value
 		var timeout := maxi(1, int(step.get("timeout_frames", 600)))
 		var required_count := maxi(1, int(step.get("count_gte", 1)))
-		var matches_in_window: int = probe.count_semantic_events(event_name, where, step_event_offset)
+		# Events are append-only. Retain the window for timeout diagnostics, but
+		# never revisit its old events while waiting for new matches.
+		step_event_matches += probe.count_semantic_events(event_name, where, step_event_cursor)
+		step_event_cursor = probe.semantic_events.size()
+		var matches_in_window: int = step_event_matches
 		if matches_in_window >= required_count:
 			_complete_step(probe)
 			return
@@ -217,7 +225,7 @@ func _event_trace_summary(probe: Node, event_name: String, where: Dictionary) ->
 	return {
 		"offset": step_event_offset,
 		"total_events": probe.semantic_events.size(),
-		"matches_in_window": probe.count_semantic_events(event_name, where, step_event_offset),
+		"matches_in_window": step_event_matches,
 		"prior_matches": probe.matching_semantic_events_before(event_name, where, step_event_offset),
 		"recent_events": recent,
 	}

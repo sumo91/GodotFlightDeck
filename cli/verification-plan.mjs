@@ -6,6 +6,8 @@ import {
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { pathContainsSymlink, pathIsInside } from './safety.mjs';
 import { ResultClassificationError } from './result-envelope.mjs';
+import { sourceCategory, planDriftDiagnostics } from './plan-diagnostics.mjs';
+export { verificationPlanSummary } from './plan-diagnostics.mjs';
 import { resolveEvidenceRetention } from './evidence-retention.mjs';
 import {
   canonicalEvidenceJson,
@@ -161,6 +163,15 @@ function projectTreeFingerprint(project, generatedEffects, config, observation =
     }
   }
   const hash = createHash('sha256');
+  const categories = new Map();
+  const recordCategory = (path, header, bytes) => {
+    const category = sourceCategory(path);
+    if (!categories.has(category)) categories.set(category, { category, fileCount: 0, directoryCount: 0, totalBytes: 0, hash: createHash('sha256') });
+    const item = categories.get(category);
+    item.hash.update(header);
+    if (bytes) { item.fileCount += 1; item.totalBytes += bytes.length; item.hash.update(bytes); item.hash.update('\0'); }
+    else item.directoryCount += 1;
+  };
   let fileCount = 0;
   let directoryCount = 0;
   let totalBytes = 0;
@@ -201,6 +212,7 @@ function projectTreeFingerprint(project, generatedEffects, config, observation =
         if (!exclusionAncestors.has(path)) {
           directoryCount += 1;
           hash.update(`directory\0${relation}\0`);
+          recordCategory(relation, `directory\0${relation}\0`);
         }
         visit(path);
         continue;
@@ -222,6 +234,7 @@ function projectTreeFingerprint(project, generatedEffects, config, observation =
       hash.update(`file\0${relation}\0${bytes.length}\0${executable ? 'x' : '-'}\0`);
       hash.update(bytes);
       hash.update('\0');
+      recordCategory(relation, `file\0${relation}\0${bytes.length}\0${executable ? 'x' : '-'}\0`, bytes);
     }
     if (observation) {
       const entriesAfter = readdirSync(directory, { withFileTypes: true })
@@ -246,7 +259,9 @@ function projectTreeFingerprint(project, generatedEffects, config, observation =
   };
   visit(project);
   return {
-    fingerprint: { kind: 'project-tree', state: 'tree', fileCount, directoryCount, totalBytes, sha256: hash.digest('hex') },
+    fingerprint: { kind: 'project-tree', state: 'tree', fileCount, directoryCount, totalBytes, sha256: hash.digest('hex'),
+      categories: [...categories.values()].sort((a, b) => a.category.localeCompare(b.category))
+        .map(({ hash: categoryHash, ...item }) => ({ ...item, sha256: categoryHash.digest('hex') })) },
     uidFingerprint: { kind: 'uid-sidecars', state: 'files', files: uidFiles },
     importableAssetCount,
     exclusions: exclusions.map((item) => ({ path: relative(project, item.path).replaceAll('\\', '/'), subtree: item.subtree })),
@@ -810,7 +825,16 @@ export function resolveVerificationPlan(options = {}) {
     }
   }
 
-  for (const stage of stages) stage.timeoutMs = resolvedTimeoutMs;
+  for (const stage of stages) {
+    stage.timeoutMs = resolvedTimeoutMs;
+    if (stage.disposition === 'run' && stage.includeInLegacyReport) {
+      const stem = stageReportPath(evidencePaths, stage.kind, stage.target).replace(/\.json$/, '');
+      stage.diagnosticLogPaths = { stdout: `${stem}.stdout.log`, stderr: `${stem}.stderr.log` };
+      stage.generatedEffects.push(...Object.entries(stage.diagnosticLogPaths).map(([stream, path]) => ({
+        kind: 'stage-diagnostic-log', target: `${stage.kind}:${stage.target}:${stream}`, path,
+      })));
+    }
+  }
   const retentionCandidates = resolveEvidenceRetention({
     project,
     evidenceRoot: evidencePaths.root,
@@ -939,13 +963,15 @@ export function verificationPlanExecutionBudgetMilliseconds(plan) {
   return Math.ceil(budget);
 }
 
-export function assertVerificationPlanDigest(plan, expectedDigest) {
+export function assertVerificationPlanDigest(plan, expectedDigest, originalPlan, context = {}) {
   if (expectedDigest === undefined || expectedDigest === '') return;
   if (typeof expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(expectedDigest)) {
     throw new Error('Invalid expected verification plan digest');
   }
   if (plan.digest !== expectedDigest) {
-    throw new ResultClassificationError('plan_drift', 'Verification Plan changed after preflight. Nothing was started; invoke verify again to review the current plan.');
+    const error = new ResultClassificationError('plan_drift', 'Verification Plan changed after preflight; evidence cannot be bound to the changed inputs. Invoke verify again to review the current plan.');
+    if (originalPlan) error.planDrift = planDriftDiagnostics(originalPlan, plan, context);
+    throw error;
   }
 }
 

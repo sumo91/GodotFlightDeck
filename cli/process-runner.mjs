@@ -314,6 +314,9 @@ if (specification.propagateLifecycleRegistry === true) {
 }
 
 let child;
+const timingStartedNs = monotonicNowNs();
+let timingSpawnedNs = 0n;
+let timingCleanupNs = 0n;
 let executionTimer;
 let orphanTimer;
 let cleanupPoll;
@@ -344,6 +347,10 @@ function writeDescriptor(descriptor, bytes) {
 }
 
 function publishMetadata(status) {
+  const ended = monotonicNowNs();
+  const cleanupStarted = timingCleanupNs || ended;
+  const launched = timingSpawnedNs || cleanupStarted;
+  const milliseconds = (end, start) => Number(end - start) / 1_000_000;
   const metadata = {
     schemaVersion: 1,
     nonce,
@@ -359,6 +366,9 @@ function publishMetadata(status) {
     stderrTruncated: stderr.truncated,
     stdoutBytes: stdout.total,
     stderrBytes: stderr.total,
+    timings: { clock: 'monotonic', scope: 'supervised_child',
+      launchMs: milliseconds(launched, timingStartedNs), executionMs: milliseconds(cleanupStarted, launched),
+      cleanupMs: milliseconds(ended, cleanupStarted), totalMs: milliseconds(ended, timingStartedNs) },
   };
   writeDescriptor(3, Buffer.from(`${JSON.stringify(metadata)}\n`));
 }
@@ -426,6 +436,7 @@ async function removeRegistryBestEffort() {
 async function finalize(status) {
   if (finalized) return;
   finalized = true;
+  if (!timingCleanupNs) timingCleanupNs = monotonicNowNs();
   clearLifecycleTimers();
   try { child?.stdout?.destroy(); } catch { /* already closed */ }
   try { child?.stderr?.destroy(); } catch { /* already closed */ }
@@ -475,6 +486,7 @@ function pollForCleanup() {
 function beginCleanup(status, reason) {
   if (finalizing || finalized) return;
   finalizing = true;
+  timingCleanupNs = monotonicNowNs();
   requestedStatus = status;
   finishReason = reason;
   cleanupDeadlineNs = monotonicNowNs() + BigInt(cleanupTimeoutMs) * 1_000_000n;
@@ -534,6 +546,7 @@ if (child) {
   child.stderr.on('error', () => {});
 
   child.on('spawn', () => {
+    timingSpawnedNs = monotonicNowNs();
     registryEvent('add', child.pid);
     scheduleExecutionDeadline();
   });

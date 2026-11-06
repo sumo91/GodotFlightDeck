@@ -48,6 +48,9 @@ import {
 } from './evidence-journal.mjs';
 import { buildEvidenceIndex } from './evidence-index.mjs';
 import { formatScenarioLintWarnings, lintScenarioDefinition } from './scenario-lint.mjs';
+import { diagnosticHints, assertionCompletion, boundedProcessTimings, boundedClockReport } from './diagnostics.mjs';
+import { planDriftDiagnostics } from './plan-diagnostics.mjs';
+import { withRuntimeClockMetadata } from './runtime-clock.mjs';
 import {
   AGENT_DECISION_TREE,
   describeEditorAction,
@@ -80,6 +83,7 @@ import {
   resolveVerificationPlan,
   verificationPlanExecutionBudgetMilliseconds,
   verificationStagePreparationBudgetMilliseconds,
+  verificationPlanSummary,
 } from './verification-plan.mjs';
 import {
   CLI_COMMANDS,
@@ -98,6 +102,7 @@ const PROCESS_CLEANUP_TIMEOUT_MS = 750;
 const PROCESS_WATCHDOG_GRACE_MS = 750;
 const PROCESS_OUTPUT_OVERHEAD_BYTES = 256 * 1024;
 let internalStageOutcomeSink = null;
+const internalProcessTimings = [];
 
 const color = {
   green: (value) => process.stdout.isTTY ? `\u001b[32m${value}\u001b[0m` : value,
@@ -337,6 +342,7 @@ function runSyncDirect(executable, args, options = {}) {
   const maximumOutputBytes = Math.max(16 * 1024, Math.min(64 * 1024 * 1024,
     Number(options.maxOutputBytes ?? options.maxBuffer ?? 32 * 1024 * 1024)));
   const env = options.inheritEnv === false ? { ...(options.env ?? {}) } : { ...process.env, ...(options.env ?? {}) };
+  const processStarted = process.hrtime.bigint();
   const result = spawnSync(executable, args, {
     cwd: options.cwd || undefined,
     env,
@@ -347,6 +353,8 @@ function runSyncDirect(executable, args, options = {}) {
     windowsHide: true,
     shell: false,
   });
+  const timings = { clock: 'monotonic', scope: 'direct_child', phaseBreakdownAvailable: false,
+    totalMs: Number(process.hrtime.bigint() - processStarted) / 1_000_000 };
   const timedOut = result.error?.code === 'ETIMEDOUT';
   const spawnFailed = Boolean(result.error) && !timedOut;
   const status = timedOut ? 124 : spawnFailed ? 127 : (result.status ?? 1);
@@ -359,6 +367,7 @@ function runSyncDirect(executable, args, options = {}) {
   const output = `${stdout}${stderr}`;
   if (!options.quiet && output) process.stdout.write(output);
   const lifecycleEvidence = { phase, reason: timedOut ? `${phase}_timeout` : spawnFailed ? 'process_spawn' : null, timedOut, cleanupTimedOut: false, outputTruncated: false };
+  recordInternalProcessTiming(phase, status, timings);
   if (status === 127) publishInternalStageOutcome('process_spawn', 'process_result', `Configured ${phase} process could not be started`, lifecycleEvidence);
   else if (status === 124) publishInternalStageOutcome('timeout', 'process_result', `${phase} timed out`, lifecycleEvidence);
   return {
@@ -372,6 +381,7 @@ function runSyncDirect(executable, args, options = {}) {
     cancelled: false,
     phase,
     reason: lifecycleEvidence.reason,
+    timings,
   };
 }
 
@@ -438,6 +448,7 @@ function runSync(executable, args, options = {}) {
     cleanupTimedOut: status === 125 || supervisor?.cleanupTimedOut === true,
     outputTruncated: supervisor?.stdoutTruncated === true || supervisor?.stderrTruncated === true,
   };
+  recordInternalProcessTiming(phase, status, supervisor?.timings);
   if (status === 127) publishInternalStageOutcome('process_spawn', 'process_result', `Configured ${phase} process could not be started`, lifecycleEvidence);
   else if (status === 124) publishInternalStageOutcome('timeout', 'process_result', `${phase} timed out`, lifecycleEvidence);
   else if (status === 125) publishInternalStageOutcome('cleanup_timeout', 'process_result', `${phase} supervisor exceeded its cleanup deadline`, lifecycleEvidence);
@@ -454,6 +465,7 @@ function runSync(executable, args, options = {}) {
     phase,
     reason: supervisor?.reason ?? (watchdogExpired ? 'supervisor_watchdog_timeout' : undefined),
     supervisor,
+    timings: boundedProcessTimings(supervisor?.timings),
   };
 }
 
@@ -526,6 +538,14 @@ function publishInternalStageOutcome(classification, source, summary, actual = u
     summary,
     ...(actual ? { actual } : {}),
   })}\n`, { mode: 0o600 });
+}
+
+function recordInternalProcessTiming(phase, exitCode, timings) {
+  if (!internalStageOutcomeSink || !timings) return;
+  if (internalProcessTimings.length < 16) internalProcessTimings.push({ phase, exitCode, timings: boundedProcessTimings(timings) });
+  writeFileAtomic(`${internalStageOutcomeSink.path}.timings`, JSON.stringify({
+    nonce: internalStageOutcomeSink.nonce, processes: internalProcessTimings,
+  }), { mode: 0o600 });
 }
 
 function syncDirectoryBestEffort(path) {
@@ -2254,7 +2274,7 @@ async function runProject(projectCandidate, options, passthrough) {
       ...passthrough,
     ];
     console.log(color.muted(`Observing ${project} for ${frames} frames (seed ${seedValue})`));
-    const result = runSync(godot, ['--path', project, '--', ...userArgs], {
+    const result = runSync(godot, withRuntimeClockMetadata(['--path', project, '--', ...userArgs]), {
       cwd: project,
       timeoutMs: timeoutMilliseconds(options),
       phase: 'run-query',
@@ -2789,6 +2809,7 @@ function ensureFixtureAdapterIsProfileDeclared(userArgs) {
 }
 
 function runProfileGodot(godot, args, options, fixtureAdapter) {
+  args = withRuntimeClockMetadata(args);
   if (!fixtureAdapter) return runSync(godot, args, options);
   const isolationRoot = createLifecycleTemporaryDirectory('gdeck-fixture-run-');
   const capability = randomBytes(32).toString('hex');
@@ -3576,7 +3597,7 @@ async function editorCommand(positional, options) {
   // Batch defaults to preview unless --apply is present.
   const batchDryRun = action === 'batch' ? options.apply !== true : Boolean(options['dry-run']);
   if (action === 'batch' && batchDryRun) {
-    console.log(color.muted('Batch preview mode (no mutations). Pass --apply to commit after approval.'));
+    if (!options.json) console.log(color.muted('Batch preview mode (no mutations). Pass --apply to commit after approval.'));
   }
   if (action === 'sessions') {
     const inventory = await inspectEditorSessions(project);
@@ -3754,7 +3775,9 @@ function assertVerificationSnapshotInputs(plan, executionProject) {
     return input;
   });
   if (canonicalVerificationPlanJson(comparableInputs(snapshotPlan.inputs)) !== canonicalVerificationPlanJson(comparableInputs(plan.inputs))) {
-    throw new ResultClassificationError('plan_drift', 'Verification Plan input changed while preparing the immutable execution snapshot. Nothing was started; invoke verify again.');
+    const error = new ResultClassificationError('plan_drift', 'Verification Plan input changed while preparing the immutable execution snapshot. Nothing was started; invoke verify again.');
+    error.planDrift = planDriftDiagnostics(plan, { ...snapshotPlan, inputs: comparableInputs(snapshotPlan.inputs) }, { phase: 'snapshot_validation' });
+    throw error;
   }
 }
 
@@ -3836,7 +3859,7 @@ function prepareProjectImportsForSealing(root, runtime) {
   else if (result.status !== 0 || ERROR_PATTERN.test(result.output)) {
     error = new ResultClassificationError('precondition', 'Godot import preparation failed before the project could be sealed; no verification stage was started');
   }
-  if (!error) return;
+  if (!error) return boundedProcessTimings(result.timings);
   error.resultPhase = 'import_preflight';
   error.resultDiagnosticOutput = String(result.output ?? '');
   error.resultProcessEvidence = {
@@ -3846,9 +3869,10 @@ function prepareProjectImportsForSealing(root, runtime) {
     timedOut: result.timedOut === true,
     cleanupTimedOut: result.cleanupTimedOut === true,
     outputTruncated: result.outputTruncated === true,
-    stdoutBytes: Number(result.supervisor?.stdoutBytes ?? 0),
-    stderrBytes: Number(result.supervisor?.stderrBytes ?? 0),
+    stdoutBytes: Number(result.supervisor?.stdoutBytes ?? Buffer.byteLength(result.stdout ?? '')),
+    stderrBytes: Number(result.supervisor?.stderrBytes ?? Buffer.byteLength(result.stderr ?? '')),
     engineError: ERROR_PATTERN.test(result.output),
+    timings: boundedProcessTimings(result.timings),
   };
   throw error;
 }
@@ -3891,13 +3915,21 @@ function removeVerificationSnapshot(snapshot) {
 }
 
 function createVerificationSnapshot(plan) {
+  const timings = { clock: 'monotonic', scope: 'verification_preparation', phases: {} };
+  let activePhase = 'snapshot_copy';
+  const measure = (name, action) => {
+    activePhase = name;
+    const started = process.hrtime.bigint();
+    try { return action(); }
+    finally { timings.phases[name] = (timings.phases[name] ?? 0) + Number(process.hrtime.bigint() - started) / 1_000_000; }
+  };
   const root = createLifecycleTemporaryDirectory('gdeck-verification-snapshot-');
   const executionProject = join(root, 'project');
   const sourceExclusions = (plan.sourceExclusions ?? []).map((item) => ({
     path: resolve(plan.project, item.path), subtree: item.subtree === true,
   }));
   try {
-    cpSync(plan.project, executionProject, {
+    measure('snapshot_copy', () => cpSync(plan.project, executionProject, {
       recursive: true,
       force: true,
       filter: (source) => {
@@ -3908,8 +3940,8 @@ function createVerificationSnapshot(plan) {
         if (parts[0] === '.gdeck') return parts.length === 1 || (parts.length === 2 && parts[1] === 'config.json');
         return !sourceExclusions.some((item) => source === item.path || (item.subtree && pathIsInside(item.path, source)));
       },
-    });
-    assertVerificationSnapshotInputs(plan, executionProject);
+    }));
+    measure('snapshot_validation', () => assertVerificationSnapshotInputs(plan, executionProject));
     mkdirSync(join(executionProject, '.godot'), { recursive: true });
     const importableAssets = verificationImportableAssetCount(executionProject);
     const unitNeedsClassCache = plan.stages.some((stage) => stage.disposition === 'run' && stage.kind === 'unit');
@@ -3918,13 +3950,15 @@ function createVerificationSnapshot(plan) {
     }
     if (plan.preparation.godotImportRequired) {
       const godot = findGodot({ godotPath: plan.preparation.godotPath });
-      prepareProjectImportsForSealing(executionProject, { godot, timeoutMs: plan.timeoutMs });
-      assertVerificationSnapshotInputs(plan, executionProject);
+      timings.importProcess = measure('import', () => prepareProjectImportsForSealing(executionProject, { godot, timeoutMs: plan.timeoutMs }));
+      measure('snapshot_validation', () => assertVerificationSnapshotInputs(plan, executionProject));
     }
-    setVerificationTreeReadOnly(executionProject);
-    return { root, project: executionProject };
+    measure('snapshot_seal', () => setVerificationTreeReadOnly(executionProject));
+    return { root, project: executionProject, timings };
   } catch (error) {
-    removeVerificationSnapshot({ root, project: executionProject });
+    error.resultPhase ??= activePhase;
+    measure('snapshot_cleanup', () => removeVerificationSnapshot({ root, project: executionProject }));
+    error.resultTimings = timings;
     throw error;
   }
 }
@@ -3982,6 +4016,7 @@ function executeVerificationCommand(planned, plan, executionProject) {
   })).toString('base64url');
   let result;
   let outcome;
+  let childProcesses = [];
   try {
     result = runSync(process.execPath, [CLI_FILE, ...argumentsList], {
       maxBuffer: 64 * 1024 * 1024,
@@ -4009,11 +4044,39 @@ function executeVerificationCommand(planned, plan, executionProject) {
     if (!outcome && result.status === 124) outcome = { classification: 'timeout', source: 'process_result', summary: 'Stage wrapper exceeded its execution deadline' };
     else if (!outcome && result.status === 125) outcome = { classification: 'cleanup_timeout', source: 'process_result', summary: 'Stage wrapper exceeded its cleanup deadline' };
     else if (!outcome && result.status === 127) outcome = { classification: 'process_spawn', source: 'process_result', summary: 'Stage wrapper could not be started' };
+    const timingsPath = `${outcomePath}.timings`;
+    if (existsSync(timingsPath)) {
+      const metadata = lstatSync(timingsPath);
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 16384) throw new Error('Internal process timings are malformed');
+      const candidate = JSON.parse(readFileSync(timingsPath, 'utf8'));
+      if (candidate.nonce !== outcomeNonce || !Array.isArray(candidate.processes) || candidate.processes.length > 16) throw new Error('Internal process timings are unbound');
+      childProcesses = candidate.processes.map(item => ({ phase: /^[a-zA-Z0-9_-]{1,80}$/.test(item.phase) ? item.phase : 'process',
+        exitCode: Number.isInteger(item.exitCode) ? item.exitCode : null, timings: boundedProcessTimings(item.timings) }));
+    }
   } finally {
     rmSync(outcomePath, { force: true });
+    rmSync(`${outcomePath}.timings`, { force: true });
+  }
+  const diagnostics = diagnosticHints(result);
+  // Retain failures and error/leak hints without putting raw payloads into reports.
+  const logStreams = {};
+  if (result.status !== 0 || diagnostics.firstIssue) {
+    const directory = openVerificationPublicationDirectory(plan.project, plan.evidenceBinding.stageReportRoot, 'stage diagnostic directory', 0o700);
+    try {
+      for (const stream of ['stdout', 'stderr']) {
+        const path = planned.diagnosticLogPaths[stream];
+        const bytes = Buffer.from(result[stream] ?? '');
+        assertVerificationPublicationDirectory(directory);
+        if (pathContainsSymlink(plan.project, path)) throw new ResultClassificationError('report_io', 'Stage diagnostic path is unsafe');
+        writeFileAtomicNoReplace(path, bytes, { mode: 0o600 });
+        assertVerificationPublicationDirectory(directory);
+        logStreams[stream] = { path, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+      }
+    } finally { closeVerificationPublicationDirectory(directory); }
   }
   return {
     exitCode: result.status,
+    diagnostics: { ...diagnostics, logs: { streams: logStreams, complete: !result.outputTruncated, encoding: 'utf8_decoded', retained: Object.keys(logStreams).length > 0 } },
     durationMs: Number(process.hrtime.bigint() - started) / 1_000_000,
     outputTail: planned.kind === 'doctor'
       ? boundedDoctorVerificationOutput(result.stdout)
@@ -4028,8 +4091,10 @@ function executeVerificationCommand(planned, plan, executionProject) {
       cleanupTimedOut: result.cleanupTimedOut === true,
       cancelled: result.cancelled === true,
       outputTruncated: result.outputTruncated === true,
-      stdoutBytes: Number(result.supervisor?.stdoutBytes ?? 0),
-      stderrBytes: Number(result.supervisor?.stderrBytes ?? 0),
+      stdoutBytes: Number(result.supervisor?.stdoutBytes ?? Buffer.byteLength(result.stdout ?? '')),
+      stderrBytes: Number(result.supervisor?.stderrBytes ?? Buffer.byteLength(result.stderr ?? '')),
+      timings: boundedProcessTimings(result.timings),
+      childProcesses,
     },
   };
 }
@@ -4152,6 +4217,7 @@ function boundedStageReport(kind, report) {
       capture_error: boundedReportNumber(report.capture_error),
       performance,
       performance_timing: performanceTiming,
+      clocks: boundedClockReport(report.clocks),
       benchmark_window: benchmarkWindow,
       scenario: scenario && typeof scenario === 'object' ? {
         name: boundedProjectIdentifier(scenario.name, 'scenario', 200),
@@ -4183,10 +4249,11 @@ function boundedStageReport(kind, report) {
           expected_count_lte: boundedReportNumber(item?.expected_count_lte),
         })),
         assertion_list_truncated: assertions.length > 40,
+        assertions_evaluated: assertions.length,
       } : null,
     };
   }
-  if (kind === 'benchmark') return { ...common, performance, performance_timing: performanceTiming, benchmark_window: benchmarkWindow };
+  if (kind === 'benchmark') return { ...common, performance, performance_timing: performanceTiming, benchmark_window: benchmarkWindow, clocks: boundedClockReport(report.clocks) };
   if (kind === 'visual') {
     const allowed = [
       'passed', 'reason', 'baseline', 'actual', 'diff', 'diff_error', 'width', 'height', 'changed_pixels',
@@ -4502,6 +4569,8 @@ function publishVerificationPreflightFailure(
     summary: { total: 0, passed: 0, skipped: 0, failed: 0 },
     stages: [],
     verificationPlanDigest: plan.digest,
+    verificationPlan: verificationPlanSummary(plan),
+    timings: error.resultTimings ?? null,
     evidenceBinding: plan.evidenceBinding,
     coverage: preflightReportForVerificationPlan(plan).coverage,
     preflightFailure: {
@@ -4510,6 +4579,9 @@ function publishVerificationPreflightFailure(
       source,
       summary: error.message,
       ...(error.resultProcessEvidence ? { processEvidence: error.resultProcessEvidence } : {}),
+      diagnostics: { ...diagnosticHints({ stdout: diagnosticOutput }), assertions: { state: 'not_started' },
+        logPath: diagnosticOutput ? plan.diagnosticLogPath : null },
+      ...(error.planDrift ? { planDrift: error.planDrift } : {}),
     },
     artifacts,
     journal: { path: plan.evidenceBinding.journalPath, invocationIdentity: plan.invocationIdentity },
@@ -4572,6 +4644,9 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
     invocationIdentity: requireInvocationIdentity(invocationIdentity),
   };
   const plan = resolveVerificationPlan(planOptions);
+  console.log(`Verification plan ${plan.digest}; inputs ${plan.evidenceBinding.inputsDigest}`);
+  console.log(`Frozen scope: project tree and selected configuration; ${plan.inputs.find(input => input.kind === 'project-tree')?.fileCount ?? 0} files. Changes to bound inputs invalidate this run; no global editing lock.`);
+  console.log(`Excluded paths: ${verificationPlanSummary(plan).excluded.map(item => item.path).join(', ')}; .gdeck/config.json remains bound semantically; .import excluded, .uid bound separately.`);
   let executionSnapshot;
   let publicationDirectories;
   let verificationJournal;
@@ -4675,6 +4750,8 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
       },
       ...(values.outcome ? { outcome: values.outcome } : {}),
       ...(values.processEvidence ? { processEvidence: values.processEvidence } : {}),
+      ...(values.diagnostics ? { diagnostics: values.diagnostics } : {}),
+      ...(values.planDrift ? { planDrift: values.planDrift } : {}),
       ...(values.evidenceAccepted === false ? { evidenceAccepted: false } : {}),
       ...(values.relatedOutcomes?.length ? { relatedOutcomes: values.relatedOutcomes } : {}),
       ...(values.artifacts ? { artifacts: values.artifacts } : {}),
@@ -4686,7 +4763,7 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
   function ensurePlanIsCurrent(planned) {
     try {
       const current = resolveVerificationPlan(planOptions);
-      assertVerificationPlanDigest(current, plan.digest);
+      assertVerificationPlanDigest(current, plan.digest, plan, { phase: 'before_stage', stageId: planned.id });
       return true;
     } catch (error) {
       console.log(`\n${color.muted(`── ${planned.kind}: ${planned.target}`)}`);
@@ -4694,6 +4771,7 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
       legacyStage(planned, {
         status: 'failed', exitCode: 1, outputTail: error.message,
         outcome: { classification: 'plan_drift', source: 'preflight', summary: error.message },
+        planDrift: error.planDrift,
       });
       planDrifted = true;
       return false;
@@ -4770,6 +4848,7 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
       report: detail,
       outputTail: [command.outputTail, reportError].filter(Boolean).join('\n'),
       processEvidence: command.processEvidence,
+      diagnostics: { ...command.diagnostics, assertions: assertionCompletion(planned.kind, detail) },
       outcome: reportError ? (operationalIncompleteUnit && command.outcome ? command.outcome : {
         classification: existsSync(planned.reportPath) ? reportClassification : 'report_missing',
         source: 'preflight',
@@ -4849,12 +4928,13 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
     }
     try {
       const current = resolveVerificationPlan(planOptions);
-      assertVerificationPlanDigest(current, plan.digest);
+      assertVerificationPlanDigest(current, plan.digest, plan, { phase: 'after_stage', stageId: planned.id });
     } catch (error) {
       stage.status = 'failed';
       stage.outputTail = [stage.outputTail, `Verification Plan input changed while the stage was running; its result was rejected: ${error.message}`].filter(Boolean).join('\n');
       stage.outcome = { classification: 'plan_drift', source: 'preflight', summary: error.message };
       stage.evidenceAccepted = false;
+      stage.planDrift = error.planDrift;
       planDrifted = true;
       if (planned.kind === 'export') exportExecutionAttempted = true;
       commitStageTerminal(planned, stage, 'failed');
@@ -5041,7 +5121,9 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
 
   const completedSnapshot = executionSnapshot;
   executionSnapshot = null;
+  const cleanupStarted = process.hrtime.bigint();
   removeVerificationSnapshot(completedSnapshot);
+  const snapshotCleanupMs = Number(process.hrtime.bigint() - cleanupStarted) / 1_000_000;
 
   for (const stage of stages) stage.outputTail = boundedOutputTail(stage.outputTail);
   const failed = stages.filter((stage) => stage.status === 'failed').length;
@@ -5059,6 +5141,8 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
     summary: { total: stages.length, passed, skipped, failed },
     stages,
     verificationPlanDigest: plan.digest,
+    verificationPlan: verificationPlanSummary(plan),
+    timings: { preparation: completedSnapshot?.timings ?? null, snapshotCleanupMs },
     evidenceBinding: plan.evidenceBinding,
     journal: { path: plan.evidenceBinding.journalPath, invocationIdentity: plan.invocationIdentity },
     coverage: plan.stages.map((stage) => ({
@@ -5723,7 +5807,16 @@ async function main() {
 }
 
 if (privateLifecycleRegistry()) {
-  await main();
+  // An MCP supervisor owns cleanup, but has not prepared Unit/Verify bindings.
+  // Only skip coordination when this is already a coordinated child invocation.
+  const invocationArgs = process.argv.slice(2);
+  const alreadyCoordinated = invocationArgs.some((argument) => argument.startsWith('--gdeck-internal-'))
+    || Boolean(process.env.GDECK_INTERNAL_VERIFY_STAGE);
+  if (['unit', 'verify'].includes(invocationArgs[0]) && !alreadyCoordinated) {
+    process.exitCode = await runCursorCompatInvocation(invocationArgs);
+  } else {
+    await main();
+  }
 } else if (cursorCompatEnabled()) {
   // Agent-shell compat (GDECK_CURSOR_COMPAT=1): prepare unit/verify bindings in-process, skip nested Job supervisors.
   process.exitCode = await runCursorCompatInvocation(process.argv.slice(2));
