@@ -69,4 +69,9 @@
 
 ## 发布与安装验证
 
-按用户后续授权提交、推送修订，并将已提交源码安装到全局 MCP 目录。保留旧安装完整备份；包版本仍为 1.6.5，以 Git 提交和 MCP schema 2 构建指纹标识本次修订。通过新建的已安装 SDK MCP 会话同步 GreyRanger 插件、运行点击窄回归、fast 与 campaign-expansion，并记录源码与已安装文件哈希。具体部署提交、构建指纹和验证结果续写 GreyRanger 的 `docs/tooling/gdeck-revision-validation-2026-11-06.md`。
+按用户后续授权提交、推送修订，并将已提交源码安装到全局 MCP 目录。保留旧安装完整备份；首次部署包版本为 1.6.5，以 Git 提交和 MCP schema 2 构建指纹标识修订。通过新建的已安装 SDK MCP 会话同步 GreyRanger 插件、运行点击窄回归、fast 与 campaign-expansion，并记录源码与已安装文件哈希。具体部署提交、构建指纹和验证结果续写 GreyRanger 的 `docs/tooling/gdeck-revision-validation-2026-11-06.md`。
+
+
+## 1.6.6 版本同步
+
+按用户要求将本次反馈修订发布版本升级至 1.6.6。主包、MCP 包和 lockfile、plugin.cfg、插件入口、Editor Bridge、runtime probe、Unit 报告版本及当前版本文档一并同步；旧测试报告与历史补丁的 1.6.5 标识保持其原始事实。全局安装和 GreyRanger 项目插件/配置通过已安装 MCP 的事务更新，安装后版本一致性与 fast 结果记入 GreyRanger 验证文档。

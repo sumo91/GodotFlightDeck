@@ -3,7 +3,7 @@
 Changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics.
 This fork is **not** a byte-identical upstream release.
 
-## Unreleased — MCP compatibility fixes
+## 1.6.6 (2026-11-06 — GreyRanger feedback revisions)
 
 - Match MCP arguments to the CLI contract: init timeouts stay in the MCP supervisor, template actions use their CLI names, and runtime profiles remain positional.
 - Preserve JSON property types and negative values; supply root-node defaults when optional editor paths are omitted.
@@ -11,6 +11,12 @@ This fork is **not** a byte-identical upstream release.
 - Validate input schemas and required operands before execution; forward supported JSON output flags and activate watch mode from its action.
 - Insert coordinator-generated verify/unit report options before `--`, preserving argument boundaries during the second CLI parse.
 - Add contract tests and an isolated real-Godot MCP smoke test covering verification, unit execution, property writes, batch preview/commit, undo and explicit deletion. See `mcp/README.md`.
+
+- Incrementally scan scenario wait-event windows while preserving complete event history and existing action-window semantics.
+- Return bounded MCP schema 2 results, execution-bound Verdict envelopes, private logs with byte paging, and service build identities.
+- Supervise MCP execution asynchronously with cancellation/disconnect cleanup and explicit scenario timeouts up to 7,800 seconds.
+- Report diagnostic-only exit clues, process/snapshot timings, simulation and wall-clock measurements, and frozen-plan drift details without changing Verdict or performance budgets.
+- Align package, MCP lockfile, addon, Editor Bridge, runtime probe and Unit report versions at 1.6.6. See `docs/greyranger-feedback-revision-plan.md` for validation and remaining coverage limits.
 
 ## 1.6.5 (Codex + ZCode integration)
 

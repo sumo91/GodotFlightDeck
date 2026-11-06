@@ -1,6 +1,6 @@
 {
   "name": "godot-flight-deck-mcp",
-  "version": "1.6.5",
+  "version": "1.6.6",
   "private": true,
   "description": "MCP server exposing GodotFlightDeck gdeck_* tool families to ZCode and other MCP clients",
   "type": "module",

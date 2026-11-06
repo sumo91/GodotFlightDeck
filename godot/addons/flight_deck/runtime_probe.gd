@@ -5,7 +5,7 @@ extends Node
 
 signal command_requested(command_name: String, payload: Dictionary)
 
-const VERSION := "1.6.5"
+const VERSION := "1.6.6"
 const DIAGNOSTIC_EVENT_LIMIT := 10
 const DIAGNOSTIC_COLLECTION_LIMIT := 16
 const DIAGNOSTIC_STRING_LIMIT := 256
