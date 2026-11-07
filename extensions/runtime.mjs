@@ -2,7 +2,8 @@ import { capturePairSummary } from '../cli/capture-ab.mjs';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, parse, relative, resolve } from 'node:path';
-import { getPiAction, getPiFamily } from '../registry/commands.mjs';
+import { buildCliArgs as sharedCliArgs } from '../registry/cli-args.mjs';
+import { PI_FIELDS, getPiAction, getPiFamily } from '../registry/commands.mjs';
 import {
   assessDoctorCapabilities,
   DOCTOR_CAPABILITY_IDS,
@@ -23,7 +24,6 @@ import {
 
 export { buildResultEnvelope, enrichResultEnvelope, renderResultEnvelopeText };
 
-const PROFILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const CLASS_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 const PROPERTY_PATTERN = /^[A-Za-z0-9_/]+$/;
 const DEFAULT_CONFIRMATION_TIMEOUT_SECONDS = 90;
@@ -364,17 +364,6 @@ function jsonString(value, maximumBytes = 128 * 1024) {
   const serialized = JSON.stringify(value);
   if (serialized === undefined || Buffer.byteLength(serialized) > maximumBytes) throw new Error('Editor value is too large');
   return serialized;
-}
-
-function addTimeout(args, timeout) {
-  const seconds = optionalNumber(timeout, 'timeout', 1, 900);
-  if (seconds !== undefined) args.push('--timeout', String(seconds));
-}
-
-function positionalArgs(prefix, values) {
-  const firstOptionLike = values.findIndex((value) => String(value).startsWith('-'));
-  if (firstOptionLike < 0) return [...prefix, ...values];
-  return [...prefix, ...values.slice(0, firstOptionLike), '--', ...values.slice(firstOptionLike)];
 }
 
 function readProjectConfig(project, purpose) {
@@ -818,287 +807,56 @@ export function verificationSummary(report, options = {}) {
 
 export function buildCliArgs(family, params, project, internal = {}) {
   const action = params.action;
-  if (typeof action !== 'string') throw new Error('Missing action');
-  const familyDefinition = getPiFamily(family);
-  if (!familyDefinition) throw new Error(`Unsupported Flight Deck tool family: ${family}`);
-  const actionDefinition = getPiAction(family, action);
-  if (!actionDefinition) throw new Error(`Unsupported ${family} action: ${action}. Allowed: ${Object.keys(familyDefinition.actions).join(', ')}`);
-  assertOnly(params, actionDefinition.parameters);
-
-  if (family === 'project') {
-    if (action === 'detect') {
-      assertOnly(params, []);
-      return [];
+  const definition = getPiAction(family, action);
+  if (!definition) throw new Error(`Unsupported Flight Deck action: ${family}:${action}`);
+  assertOnly(params, definition.parameters);
+  const fields = new Map(getPiFamily(family).fields.map(entry => typeof entry === 'string' ? [entry, entry] : [entry.name, entry.field]));
+  for (const [name, value] of Object.entries(params)) {
+    if (['action', 'project'].includes(name) || value === undefined) continue;
+    const field = PI_FIELDS[fields.get(name)];
+    if (field.kind === 'string') requireText(value, name, field.pattern ? new RegExp(field.pattern) : null, field.maxLength ?? 32768);
+    if (field.kind === 'integer') optionalInteger(value, name, field.minimum, field.maximum);
+    if (field.kind === 'number') optionalNumber(value, name, field.minimum, field.maximum);
+    if (field.kind === 'boolean' && typeof value !== 'boolean') throw new Error(`Invalid ${name}`);
+    if (field.kind === 'enum' && !field.values.includes(value)) throw new Error(`Invalid ${name}`);
+    if (field.kind === 'operations') {
+      if (!Array.isArray(value) || value.length < 1 || value.length > 100) throw new Error('Batch requires 1 to 100 operations');
+      jsonString(value, 512 * 1024);
     }
-    if (action === 'init') {
-      assertOnly(params, ['timeout']);
-      optionalNumber(params.timeout, 'timeout', 1, 900);
-      return ['init', project];
-    }
-    if (action === 'doctor') {
-      assertOnly(params, ['timeout']);
-      const args = ['doctor', project, '--json'];
-      addTimeout(args, params.timeout);
-      return args;
-    }
-    if (action === 'evidence') {
-      assertOnly(params, []);
-      return ['evidence-index', project, '--json'];
-    }
-    throw new Error(`Unsupported project action: ${action}`);
+    if (field.kind === 'any') jsonString(value);
   }
-
-  if (family === 'validate') {
-    if (action === 'check') {
-      assertOnly(params, ['file', 'timeout']);
-      const args = ['check', project];
-      if (params.file !== undefined) {
-        if (typeof params.file !== 'string' || params.file.length === 0 || params.file.length > 512) {
-          throw new Error('check file must be a non-empty path');
-        }
-        args.push('--file', params.file);
-      }
-      addTimeout(args, params.timeout);
-      return args;
-    }
-    if (action === 'unit') {
-      assertOnly(params, ['filter', 'timeout', 'verbosity']);
-      const args = ['unit', project];
-      if (params.filter !== undefined) args.push(`--filter=${requireText(params.filter, 'unit filter', null, 120)}`);
-      if (internal.reportPath) args.push('--output', internal.reportPath);
-      if (params.verbosity !== undefined) args.push('--verbosity', normalizeVerbosity(params.verbosity));
-      addTimeout(args, params.timeout);
-      if (internal.unitBinding !== undefined) {
-        if (!unitExecutionBindingMatches(internal.unitBinding, internal.unitBinding)) throw new Error('Invalid internal Unit binding');
-        args.push(`--gdeck-internal-unit-binding=${Buffer.from(JSON.stringify(internal.unitBinding)).toString('base64url')}`);
-      }
-      return args;
-    }
-    if (action === 'scenario') {
-      assertOnly(params, ['name', 'profile', 'frames', 'timeout']);
-      const args = ['scenario', requireText(params.name, 'scenario name', PROFILE_PATTERN, 100), project];
-      if (params.profile !== undefined) args.push('--profile', requireText(params.profile, 'profile', PROFILE_PATTERN, 100));
-      const frames = optionalInteger(params.frames, 'frames', 1, 100_000);
-      if (frames !== undefined) args.push('--frames', String(frames));
-      if (internal.reportPath) args.push('--report', internal.reportPath);
-      addTimeout(args, params.timeout); return args;
-    }
-    if (action === 'baseline') {
-      assertOnly(params, ['profile', 'frames', 'timeout']);
-      const args = ['baseline', requireText(params.profile ?? 'default', 'profile', PROFILE_PATTERN, 100), project];
-      const frames = optionalInteger(params.frames, 'frames', 1, 100_000);
-      if (frames !== undefined) args.push('--frames', String(frames));
-      addTimeout(args, params.timeout); return args;
-    }
-    if (action === 'visual') {
-      assertOnly(params, ['profile', 'tolerance', 'threshold', 'timeout']);
-      const args = ['visual-test', requireText(params.profile ?? 'default', 'profile', PROFILE_PATTERN, 100), project];
-      const tolerance = optionalNumber(params.tolerance, 'tolerance', 0, 1);
-      const threshold = optionalNumber(params.threshold, 'threshold', 0, 1);
-      if (tolerance !== undefined) args.push('--tolerance', String(tolerance));
-      if (threshold !== undefined) args.push('--threshold', String(threshold));
-      addTimeout(args, params.timeout); return args;
-    }
-    if (action === 'benchmark') {
-      assertOnly(params, ['profile', 'frames', 'warmupFrames', 'timeout']);
-      const args = ['benchmark', requireText(params.profile ?? 'default', 'profile', PROFILE_PATTERN, 100), project];
-      const frames = optionalInteger(params.frames, 'frames', 1, 100_000);
-      const warmupFrames = optionalInteger(params.warmupFrames, 'warmup frames', 0, 100_000);
-      if (frames !== undefined) args.push('--frames', String(frames));
-      if (warmupFrames !== undefined) args.push('--warmup', String(warmupFrames));
-      addTimeout(args, params.timeout); return args;
-    }
-    if (action === 'verify') {
-      assertOnly(params, ['profile', 'timeout', 'verbosity', 'json']);
-      const args = ['verify', project];
-      if (params.profile !== undefined) args.push('--profile', requireText(params.profile, 'Verification Profile', PROFILE_PATTERN, 100));
-      if (internal.reportPath) args.push('--output', internal.reportPath);
-      if (params.verbosity !== undefined) args.push('--verbosity', normalizeVerbosity(params.verbosity));
-      addTimeout(args, params.timeout);
-      if (internal.expectedPlanDigest !== undefined) {
-        if (typeof internal.expectedPlanDigest !== 'string' || !/^[a-f0-9]{64}$/.test(internal.expectedPlanDigest)) {
-          throw new Error('Invalid internal verification plan digest');
-        }
-        args.push(`--gdeck-internal-verify-plan-digest=${internal.expectedPlanDigest}`);
-      }
-      if (internal.invocationIdentity !== undefined) {
-        if (typeof internal.invocationIdentity !== 'string' || !/^[a-f0-9]{64}$/.test(internal.invocationIdentity)) {
-          throw new Error('Invalid internal verification invocation identity');
-        }
-        args.push(`--gdeck-internal-invocation-identity=${internal.invocationIdentity}`);
-      }
-      if (params.json === true) args.push('--json');
-      return args;
-    }
-    if (action === 'oracle') {
-      assertOnly(params, ['timeout', 'json']);
-      const args = ['oracle-verify', project];
-      if (params.json === true) args.push('--json');
-      addTimeout(args, params.timeout);
-      return args;
-    }
-    throw new Error(`Unsupported validation action: ${action}`);
-  }
-
-  if (family === 'scene') {
-    if (action === 'doctor') {
-      assertOnly(params, ['timeout', 'json']);
-      const args = ['scene', 'doctor', project];
-      if (params.json === true) args.push('--json');
-      addTimeout(args, params.timeout);
-      return args;
-    }
-    if (action === 'set') {
-      assertOnly(params, ['scene', 'path', 'property', 'value', 'apply', 'timeout']);
-      if (typeof params.scene !== 'string' || !params.scene.startsWith('res://')) {
-        throw new Error('scene set requires a res:// scene path');
-      }
-      if (typeof params.property !== 'string' || params.property.length === 0) {
-        throw new Error('scene set requires a property name');
-      }
-      const args = ['scene', 'set', params.scene, params.path ?? '.', params.property, JSON.stringify(params.value), project];
-      if (params.apply === true) args.push('--apply');
-      addTimeout(args, params.timeout);
-      return args;
-    }
-    if (action === 'restore') {
-      assertOnly(params, ['path', 'apply', 'timeout']);
-      if (typeof params.path !== 'string' || params.path.length === 0) {
-        throw new Error('scene restore requires a snapshot path');
-      }
-      const args = ['scene', 'restore', params.path, project];
-      if (params.apply === true) args.push('--apply');
-      addTimeout(args, params.timeout);
-      return args;
-    }
-    throw new Error(`Unsupported scene action: ${action}`);
-  }
-
-  if (family === 'run') {
-    if (action === 'query') {
-      assertOnly(params, ['query', 'query-file', 'frames', 'seed', 'json', 'timeout']);
-      const args = ['run', project];
-      if (params.query !== undefined) {
-        if (typeof params.query !== 'string' || params.query.length === 0 || params.query.length > 32 * 1024) {
-          throw new Error('run query must be a non-empty JSON string');
-        }
-        args.push('--query', params.query);
-      }
-      if (params['query-file'] !== undefined) {
-        if (typeof params['query-file'] !== 'string' || params['query-file'].length === 0 || params['query-file'].length > 512) {
-          throw new Error('run query-file must be a non-empty path');
-        }
-        args.push('--query-file', params['query-file']);
-      }
-      if (params.frames !== undefined) optionalNumber(params.frames, 'frames', 1, 100000);
-      if (params.frames !== undefined) args.push('--frames', String(params.frames));
-      if (params.seed !== undefined) optionalNumber(params.seed, 'seed', 0, 2147483647);
-      if (params.seed !== undefined) args.push('--seed', String(params.seed));
-      if (params.json === true) args.push('--json');
-      addTimeout(args, params.timeout);
-      return args;
-    }
-    if (action === 'watch') {
-      assertOnly(params, ['watch', 'main-scene', 'timeout']);
-      const args = ['run', project, '--watch'];
-      if (params['main-scene'] !== undefined) {
-        if (typeof params['main-scene'] !== 'string' || !params['main-scene'].startsWith('res://')) {
-          throw new Error('run watch main-scene must be a res:// path');
-        }
-        args.push('--main-scene', params['main-scene']);
-      }
-      addTimeout(args, params.timeout);
-      return args;
-    }
-    throw new Error(`Unsupported run action: ${action}`);
-  }
-
-  if (family === 'release') {
-    if (action === 'templates-status') {
-      assertOnly(params, ['timeout']);
-      const args = ['templates', 'status', project]; addTimeout(args, params.timeout); return args;
-    }
-    if (action === 'templates-install') {
-      assertOnly(params, ['timeout']);
-      const args = ['templates', 'install', project]; addTimeout(args, params.timeout); return args;
-    }
-    if (action === 'export-init') {
-      assertOnly(params, []);
-      return ['export-init', project];
-    }
-    if (action === 'export') {
-      assertOnly(params, ['target', 'debug', 'timeout']);
-      const target = params.target ?? 'all';
-      if (!['macos', 'windows', 'linux', 'all'].includes(target)) throw new Error('Invalid export target');
-      const args = ['export', target, project];
-      if (params.debug === true) args.push('--debug');
-      addTimeout(args, params.timeout); return args;
-    }
-    throw new Error(`Unsupported release action: ${action}`);
-  }
-
+  params = { ...params };
   if (family === 'editor') {
-    const prefix = ['editor', action, ...(internal.writeAuthorized === true && ['delete', 'resource-delete', 'cleanup-sessions'].includes(action) ? ['--apply'] : [])];
-    switch (action) {
-      case 'status': assertOnly(params, []); return [...prefix, project];
-      case 'sessions': assertOnly(params, []); return [...prefix, project, '--json'];
-      case 'cleanup-sessions': assertOnly(params, []); return [...prefix, project, '--json'];
-      case 'tree': {
-        assertOnly(params, ['depth', 'limit']);
-        const args = [...prefix, project];
-        const depth = optionalInteger(params.depth, 'depth', 1, 64);
-        const limit = optionalInteger(params.limit, 'limit', 1, 5000);
-        if (depth !== undefined) args.push('--depth', String(depth));
-        if (limit !== undefined) args.push('--limit', String(limit));
-        return args;
-      }
-      case 'inspect': assertOnly(params, ['path']); return positionalArgs(prefix, [nodePath(params.path ?? '.'), project]);
-      case 'logs': {
-        assertOnly(params, ['limit']);
-        const args = [...prefix, project];
-        const limit = optionalInteger(params.limit, 'limit', 1, 5000);
-        if (limit !== undefined) args.push('--limit', String(limit));
-        return args;
-      }
-      case 'set':
-        assertOnly(params, ['path', 'property', 'value']);
-        return positionalArgs(prefix, [nodePath(params.path ?? '.'), requireText(params.property, 'property', PROPERTY_PATTERN, 160), jsonString(params.value), project]);
-      case 'create':
-        assertOnly(params, ['parent', 'className', 'nodeName']);
-        return positionalArgs(prefix, [nodePath(params.parent ?? '.'), requireText(params.className, 'node class', CLASS_PATTERN, 100), requireText(params.nodeName, 'node name', CLASS_PATTERN, 100), project]);
-      case 'delete': assertOnly(params, ['path']); return positionalArgs(prefix, [nodePath(params.path), project]);
-      case 'reorder': {
-        assertOnly(params, ['path', 'index']);
-        const index = optionalInteger(params.index, 'index', 0, 100_000);
-        if (index === undefined) throw new Error('Invalid index');
-        return positionalArgs(prefix, [nodePath(params.path), String(index), project]);
-      }
-      case 'resource-inspect': assertOnly(params, ['resource']); return [...prefix, resourcePath(params.resource), project];
-      case 'resource-create':
-        assertOnly(params, ['resourceClass', 'resource']);
-        return [...prefix, requireText(params.resourceClass, 'resource class', CLASS_PATTERN, 100), resourcePath(params.resource), project];
-      case 'resource-set':
-        assertOnly(params, ['resource', 'property', 'value']);
-        return positionalArgs(prefix, [resourcePath(params.resource), requireText(params.property, 'property', PROPERTY_PATTERN, 160), jsonString(params.value), project]);
-      case 'resource-delete': assertOnly(params, ['resource']); return [...prefix, resourcePath(params.resource), project];
-      case 'resource-assign':
-        assertOnly(params, ['path', 'property', 'resource']);
-        return positionalArgs(prefix, [nodePath(params.path ?? '.'), requireText(params.property, 'property', PROPERTY_PATTERN, 160), resourcePath(params.resource), project]);
-      case 'batch': {
-        assertOnly(params, ['name', 'operations', 'commit']);
-        if (!Array.isArray(params.operations) || params.operations.length < 1 || params.operations.length > 100) throw new Error('Batch requires 1 to 100 operations');
-        jsonString(params.operations, 512 * 1024);
-        if (!internal.batchPath) throw new Error('Internal batch path is missing');
-        const args = [...prefix, internal.batchPath, project];
-        args.push(params.commit === true && internal.writeAuthorized === true ? '--apply' : '--dry-run');
-        return args;
-      }
-      case 'undo':
-      case 'redo':
-      case 'save': assertOnly(params, []); return [...prefix, project];
-      default: throw new Error(`Unsupported editor action: ${action}`);
-    }
+    if (params.path !== undefined) nodePath(params.path);
+    if (params.parent !== undefined) nodePath(params.parent, 'parent path');
+    if (params.resource !== undefined) resourcePath(params.resource);
+    if (params.property !== undefined) requireText(params.property, 'property', PROPERTY_PATTERN);
+    for (const key of ['className', 'nodeName', 'resourceClass']) if (params[key] !== undefined) requireText(params[key], key, CLASS_PATTERN, 100);
+    if (action === 'resource-assign') params.path ??= '.';
+    if (['sessions', 'cleanup-sessions'].includes(action)) params.json = true;
+    if (['delete', 'resource-delete', 'cleanup-sessions'].includes(action)) params.apply = internal.writeAuthorized === true;
+    if (action === 'batch') params.commit = params.commit === true && internal.writeAuthorized === true;
   }
-
-  throw new Error(`Unsupported Flight Deck tool family: ${family}`);
+  if (family === 'release' && action === 'export') params.target ??= 'all';
+  if (family === 'scene' && action === 'set') {
+    if (!params.scene?.startsWith('res://')) throw new Error('scene set requires a res:// scene path');
+    params.path ??= '.';
+  }
+  if (family === 'run' && params['main-scene'] !== undefined && !params['main-scene'].startsWith('res://')) throw new Error('--main-scene must be a res:// path');
+  if (family === 'project' && ['doctor', 'evidence'].includes(action)) params.json = true;
+  const args = sharedCliArgs(family, action, params, project, internal);
+  const extra = [];
+  if (internal.reportPath && ['unit', 'verify', 'scenario'].includes(action)) extra.push(action === 'scenario' ? '--report' : '--output', internal.reportPath);
+  if (internal.unitBinding !== undefined) {
+    if (!unitExecutionBindingMatches(internal.unitBinding, internal.unitBinding)) throw new Error('Invalid internal Unit binding');
+    extra.push(`--gdeck-internal-unit-binding=${Buffer.from(JSON.stringify(internal.unitBinding)).toString('base64url')}`);
+  }
+  for (const [key, flag] of [['expectedPlanDigest', 'verify-plan-digest'], ['invocationIdentity', 'invocation-identity']]) {
+    if (internal[key] === undefined || action !== 'verify') continue;
+    if (!/^[a-f0-9]{64}$/.test(internal[key])) throw new Error(`Invalid internal ${key}`);
+    extra.push(`--gdeck-internal-${flag}=${internal[key]}`);
+  }
+  const separator = args.indexOf('--');
+  args.splice(separator < 0 ? args.length : separator, 0, ...extra);
+  return args;
 }
