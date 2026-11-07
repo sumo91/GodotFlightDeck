@@ -43,6 +43,9 @@ export const SERVICE_INFO = Object.freeze({
   schemaVersion: 2,
   buildId: createHash("sha256").update(Buffer.concat([
     "registry/cli-args.mjs", "extensions/runtime.mjs", "mcp/server.mjs", "mcp/result.mjs", "mcp/supervisor.mjs", "cli/gdeck.mjs", "registry/commands.mjs",
+    "cli/atomic-files.mjs", "cli/execution.mjs", "cli/lifecycle-resources.mjs", "cli/project-config.mjs",
+    "cli/release-manifest.mjs", "cli/tool-context.mjs", "cli/unit-binding.mjs", "cli/verification-report.mjs",
+    "cli/verification-snapshot.mjs", "cli/verification-stage.mjs", "cli/verification.mjs",
     "godot/addons/flight_deck/scenario_runner.gd",
     "godot/addons/flight_deck/runtime_probe.gd", "cli/process-runner.mjs", "cli/verification-plan.mjs",
     "cli/process-lifecycle.mjs", "cli/watch-output.mjs", "cli/performance-budgets.mjs", "cli/plan-diagnostics.mjs", "cli/diagnostics.mjs", "cli/runtime-clock.mjs",
