@@ -89,7 +89,8 @@ export async function executeVerificationCommand(planned, plan, executionProject
         ...(candidate.actual && typeof candidate.actual === 'object' ? { actual: candidate.actual } : {}),
       };
     }
-    if (!outcome && result.status === 124) outcome = { classification: 'timeout', source: 'process_result', summary: 'Stage wrapper exceeded its execution deadline' };
+    if (result.cancelled) outcome = { classification: 'cancelled', source: 'process_result', summary: 'Stage execution was cancelled' };
+    else if (!outcome && result.status === 124) outcome = { classification: 'timeout', source: 'process_result', summary: 'Stage wrapper exceeded its execution deadline' };
     else if (!outcome && result.status === 125) outcome = { classification: 'cleanup_timeout', source: 'process_result', summary: 'Stage wrapper exceeded its cleanup deadline' };
     else if (!outcome && result.status === 127) outcome = { classification: 'process_spawn', source: 'process_result', summary: 'Stage wrapper could not be started' };
     const timingsPath = `${outcomePath}.timings`;

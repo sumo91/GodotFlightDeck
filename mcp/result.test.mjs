@@ -133,3 +133,16 @@ test('explicit wait failures are typed expectations; malformed definitions remai
     }
   }
 });
+
+test('a cancelled stage preserves cancellation without hiding qualified earlier failures', async () => {
+  const { buildResultEnvelope } = await import('../cli/result-envelope.mjs');
+  const cancelled = { kind: 'check', target: 'scripts', status: 'failed', exitCode: 143, outcome: { classification: 'cancelled', source: 'process_result' } };
+  const result = buildResultEnvelope({ report: { status: 'failed', stages: [cancelled] } });
+  assert.equal(result.verdict, 'CANCELLED');
+  assert.equal(result.decisiveStages[0].verdict, 'CANCELLED');
+  const failed = { kind: 'unit', target: 'logic', status: 'failed', exitCode: 1, report: {
+    schema_version: 1, status: 'failed', summary: { total: 1, passed: 0, failed: 1, assertions: 1, duration_ms: 1 },
+    cases: [{name:'fixture',passed:false,failure_kind:'assertion'}],
+  }};
+  assert.equal(buildResultEnvelope({ report: { status: 'failed', stages: [failed, cancelled] } }).verdict, 'FAILED');
+});

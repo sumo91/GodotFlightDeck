@@ -378,7 +378,7 @@ function decisiveEntries(stages, facts) {
       lane: laneFor(stage?.kind),
       kind: boundedText(stage?.kind, 80),
       target: boundedText(stage?.target, 160),
-      verdict: QUALIFIED_FAILURES.has(item.classification) ? 'FAILED' : 'INCONCLUSIVE',
+      verdict: QUALIFIED_FAILURES.has(item.classification) ? 'FAILED' : CANCELLED_FAILURES.has(item.classification) ? 'CANCELLED' : 'INCONCLUSIVE',
       classification: item.classification,
       source: item.source,
       ...(stage?.replay ? { replay: boundedReplayContext(stage.replay) } : {}),
@@ -495,6 +495,7 @@ export function buildResultEnvelope({ report = null, reportPath = '', markdownPa
   const stages = Array.isArray(report?.stages) ? report.stages : [];
   const facts = stages.map(stageFact);
   const qualified = facts.find((item) => item && QUALIFIED_FAILURES.has(item.classification));
+  const cancelled = facts.find((item) => item && CANCELLED_FAILURES.has(item.classification));
   const sourcePriority = { structured_report: 0, preflight: 1, process_result: 2, cancellation: 3 };
   const inconclusive = facts.map((item, index) => ({ item, index })).filter(({ item }) => item)
     .sort((left, right) => (sourcePriority[left.item.source] ?? 99) - (sourcePriority[right.item.source] ?? 99) || left.index - right.index)[0]?.item;
@@ -504,6 +505,9 @@ export function buildResultEnvelope({ report = null, reportPath = '', markdownPa
   if (qualified) {
     verdict = 'FAILED';
     primary = qualified;
+  } else if (cancelled) {
+    verdict = 'CANCELLED';
+    primary = cancelled;
   } else if (inconclusive) {
     verdict = 'INCONCLUSIVE';
     primary = inconclusive;

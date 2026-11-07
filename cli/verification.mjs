@@ -237,12 +237,12 @@ export async function verifyProject(projectCandidate, options, expectedPlanDiges
       outputTail: [command.outputTail, reportError].filter(Boolean).join('\n'),
       processEvidence: command.processEvidence,
       diagnostics: { ...command.diagnostics, assertions: assertionCompletion(planned.kind, detail) },
-      outcome: reportError ? (operationalIncompleteUnit && command.outcome ? command.outcome : {
+      outcome: reportError ? ((operationalIncompleteUnit || command.processEvidence.cancelled) && command.outcome ? command.outcome : {
         classification: existsSync(planned.reportPath) ? reportClassification : 'report_missing',
         source: 'preflight',
         summary: reportError,
       }) : command.outcome,
-      relatedOutcomes: reportError && command.outcome && !(operationalIncompleteUnit && command.outcome)
+      relatedOutcomes: reportError && command.outcome && !operationalIncompleteUnit && !command.processEvidence.cancelled
         ? [command.outcome]
         : operationalIncompleteUnit ? [{ classification: 'report_incomplete', source: 'preflight', summary: reportError }] : undefined,
     });
@@ -312,6 +312,10 @@ export async function verifyProject(projectCandidate, options, expectedPlanDiges
       });
       journalFailure = true;
       commitStageTerminal(planned, stage, 'failed');
+      break;
+    }
+    if (stage.processEvidence?.cancelled || stage.outcome?.classification === 'cancelled') {
+      commitStageTerminal(planned, stage);
       break;
     }
     try {

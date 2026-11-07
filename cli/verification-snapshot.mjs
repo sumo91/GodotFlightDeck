@@ -141,7 +141,8 @@ export async function prepareProjectImportsForSealing(root, runtime) {
     writeFileAtomic(projectFile, originalProjectGodot);
   }
   let error;
-  if (result.timedOut) error = new ResultClassificationError('timeout', 'Godot import preparation timed out before the project could be sealed', 'process_result');
+  if (result.cancelled) error = new ResultClassificationError('cancelled', 'Godot import preparation was cancelled', 'process_result');
+  else if (result.timedOut) error = new ResultClassificationError('timeout', 'Godot import preparation timed out before the project could be sealed', 'process_result');
   else if (result.status === 127) error = new ResultClassificationError('process_spawn', 'Configured Godot process could not be started during bounded import preparation', 'process_result');
   else if (result.status === 125) error = new ResultClassificationError('cleanup_timeout', 'Godot import preparation cleanup exceeded its bounded deadline', 'process_result');
   else if (result.status !== 0 || ERROR_PATTERN.test(result.output)) {
@@ -156,6 +157,7 @@ export async function prepareProjectImportsForSealing(root, runtime) {
     reason: result.reason ?? null,
     timedOut: result.timedOut === true,
     cleanupTimedOut: result.cleanupTimedOut === true,
+    cancelled: result.cancelled === true,
     outputTruncated: result.outputTruncated === true,
     stdoutBytes: Number(result.supervisor?.stdoutBytes ?? Buffer.byteLength(result.stdout ?? '')),
     stderrBytes: Number(result.supervisor?.stderrBytes ?? Buffer.byteLength(result.stderr ?? '')),
