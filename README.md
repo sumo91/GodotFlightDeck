@@ -2,7 +2,7 @@
 
 Godot Flight Deck 是一个面向自动化开发和 AI 编程代理的本地 Godot 驾驶舱。它统一处理环境诊断、脚本与单元测试、场景流程、运行时截图、视觉回归、性能预算、桌面导出和安全的 Editor 自动化，不需要操作系统屏幕录制或辅助功能权限。
 
-当前版本：`1.6.7`（Fork；详见 `README-FORK.md` / `CHANGELOG-FORK.md`）
+当前版本：`1.6.8`（Fork；详见 `README-FORK.md` / `CHANGELOG-FORK.md`）
 
 首要兼容目标：Godot `4.7`
 

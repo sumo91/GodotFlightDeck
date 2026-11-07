@@ -3,12 +3,13 @@
 Changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics.
 This fork is **not** a byte-identical upstream release.
 
-## Unreleased — same-process A/B capture
+## 1.6.8 (2026-11-07 — same-process A/B capture)
 
 - Add opt-in Scenario `capture_ab` steps through the existing CLI, MCP and Pi paths. Temporarily change supported visual node/camera properties in an isolated fixture process, capture A/B/restored A, restore property and processing state, and generate side-by-side images and heatmaps using the existing pixel comparator.
 - Require unchanged scene/camera/semantic state and pixel-identical restoration; support a fixture-provided game-state digest. Uncontrolled comparisons remain `INCONCLUSIVE`, and image differences alone do not qualify a visual failure.
 - Publish complete invocation-owned capture bundles only after the scenario succeeds and file hashes/dimensions match. Preserve earlier bundles and register pending directories for timeout/disconnect cleanup. Include bounded A/B summaries and artifacts in MCP, Pi and Verify.
 - Prepare the global script class cache for scenario/visual/benchmark verification snapshots even when the project has no importable assets; this fixes scenario-only Verify hanging on an unloaded runtime probe.
+- Exclude the local MCP dependency cache from release archives; install runtime dependencies from the committed lockfile.
 - Validation on macOS / Godot 4.7.2: 54 Node tests and both real-Godot integration suites passed. An isolated GreyRanger snapshot completed all 10 scenario steps after real mouse input moved four party units; unchanged A/B had 0% pixel difference, hiding the player locator changed 0.8865%, and restored A matched exactly. Injected state drift returned `INCONCLUSIVE` without publication. Verify preserved the A/B artifacts, and `fast` passed 123 tests / 4,943 assertions. The original game worktree was unchanged; cross-platform execution, performance budgets and exports were not revalidated.
 
 ## 1.6.7 (2026-11-07 — diagnostics and scenario improvements)
