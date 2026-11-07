@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { buildResultEnvelope, renderResultEnvelopeText } from '../cli/result-envelope.mjs';
 import { validationReportSummary, verificationReportMatchesEvidenceBinding, verificationReportReceipt } from '../extensions/runtime.mjs';
 import { unitReportDisposition } from '../cli/unit-progress.mjs';
-import { diagnosticHints, assertionCompletion, boundedProcessTimings, boundedClockReport } from '../cli/diagnostics.mjs';
+import { diagnosticHints, assertionCompletion, boundedProcessTimings, boundedClockReport,
+  readUnitDiagnostics, firstReportDiagnostics, renderDiagnosticText } from '../cli/diagnostics.mjs';
 
 export const TEXT_LIMIT_BYTES = 8192;
 const MAX_REPORT_BYTES = 8 * 1024 * 1024;
@@ -136,6 +137,8 @@ export function formatResult(action, project, result, { family = 'validate', rep
   }
   const isError = result.status !== 0 || (envelope && envelope.verdict !== 'PASSED');
   const diagnostics = { ...diagnosticHints(result), assertions: assertionCompletion(action, report) };
+  const engine = action === 'unit' ? readUnitDiagnostics(reportPath) : firstReportDiagnostics(report);
+  if (engine) diagnostics.engine = engine;
   const stages = Array.isArray(report?.stages) ? report.stages : [];
   const orderedStages = [...stages.filter(stage => stage.status === 'failed'), ...stages.filter(stage => stage.status !== 'failed')];
   const clocks = boundedClockReport(report?.clocks);
@@ -164,11 +167,11 @@ export function formatResult(action, project, result, { family = 'validate', rep
   if (!reportPath && Buffer.byteLength(result.stdout ?? '') <= 4096) {
     try { structuredContent.data = JSON.parse(result.stdout.trim()); } catch { /* not a JSON action */ }
   }
-  const text = [envelope ? (action === 'verify' ? renderResultEnvelopeText(envelope)
+  const text = [renderDiagnosticText(engine) || renderDiagnosticText(diagnostics),
+    envelope ? (action === 'verify' ? renderResultEnvelopeText(envelope)
     : `gdeck ${action}\nVerdict: ${envelope.verdict}\nClassification: ${envelope.failureClassification.code}`)
     : `gdeck ${action}: ${structuredContent.action.status}; exit ${result.status}`,
     summary ? JSON.stringify(summary) : '',
-    diagnostics.firstIssue ? `Diagnostic only: ${diagnostics.firstIssue.summary} (${diagnostics.firstIssue.stream}:${diagnostics.firstIssue.line})` : '',
     diagnostics.resources.length ? `Resource hints: ${diagnostics.resources.map(item => item.type).join(', ')} (diagnostic only)` : '',
     clocks ? `Clock: ${clocks.mode}; simulation=${clocks.simulation_seconds}s; probe wall=${clocks.wall_seconds}s. Project sampling windows and game speed remain project-defined.` : '',
     report?.verificationPlan ? `Plan: ${report.verificationPlan.planDigest}; inputs: ${report.verificationPlan.inputsDigest}; full timings/scope: cited verification report.` : '',

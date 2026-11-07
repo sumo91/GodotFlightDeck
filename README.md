@@ -2,7 +2,7 @@
 
 Godot Flight Deck 是一个面向自动化开发和 AI 编程代理的本地 Godot 驾驶舱。它统一处理环境诊断、脚本与单元测试、场景流程、运行时截图、视觉回归、性能预算、桌面导出和安全的 Editor 自动化，不需要操作系统屏幕录制或辅助功能权限。
 
-当前版本：`1.6.6`（Fork；详见 `README-FORK.md` / `CHANGELOG-FORK.md`）
+当前版本：`1.6.7`（Fork；详见 `README-FORK.md` / `CHANGELOG-FORK.md`）
 
 首要兼容目标：Godot `4.7`
 
@@ -138,6 +138,8 @@ Final Report 与 incomplete Journal 分开投影；Freshness 只使用历史 `ev
 gdeck capture hangar /path/to/project --frames 30 --output /tmp/hangar.png
 ```
 
+Capture 在输出目录内创建独立临时文件，核对本次 PNG 与成功报告后才原子替换最终图片。引擎失败、超时、缺图或报告不匹配时保留已有图片，不把它作为本次成果；成功报告中的 `capture` 指向发布后的路径。
+
 ### `gdeck benchmark`
 
 运行指定帧数并输出 JSON 性能报告：
@@ -175,6 +177,19 @@ gdeck scenario full-loop /path/to/project --profile smoke
 ```
 
 游戏可以通过 `FlightDeckProbe.event()` 发布语义事件，并监听 `command_requested` 实现安全、明确的项目测试命令。若场景的第一个步骤是 `wait_event`，它可以匹配 Runner 启动前已产生的初始化事件；后续等待仍只匹配各自步骤或前置动作窗口中的新事件，避免误用陈旧事件。等待超时时，`scenario.failure_details` 会记录当前事件窗口、窗口内匹配数，以及窗口前满足同一事件名和 `where` 条件的精确匹配；旧匹配详情最多返回 10 条，嵌套集合和字符串也会截断，避免诊断无限增长。
+
+项目或隔离测试适配器还可以通过 `FlightDeckProbe.state("travel", {"request_id": "travel-1", "ok": true})` 声明当前状态。每个名字只保留最后一次调用的深拷贝；普通游戏运行时探针未激活，此调用不记录状态。`wait_state` 按 `where` 的字段匹配最新快照，没有该状态时继续等待，超时判为声明的期望未满足。
+
+```json
+{
+  "wait_state": "travel",
+  "where": { "request_id": "travel-1", "ok": true },
+  "fail_where": { "request_id": "travel-1", "ok": false },
+  "timeout_frames": 600
+}
+```
+
+`wait_event` 同样支持可选的 `fail_where`，匹配同名事件且沿用原有事件窗口和增量游标。两个条件独立匹配；异步请求应在成功与失败条件中都写同一个请求 ID。一次更新同时满足成功和失败条件时，失败优先，并立即释放测试持有的按键和鼠标。没有 `fail_where` 的旧用例保持原语义。`wait_state` 检查当前状态，不使用事件历史或 `since`；需要保证属于本次操作时，用请求 ID 区分。
 
 ### `gdeck baseline` 与 `gdeck visual-test`
 

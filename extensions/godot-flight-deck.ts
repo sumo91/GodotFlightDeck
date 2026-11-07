@@ -22,6 +22,7 @@ import {
   unitReportDisposition,
 } from "../cli/unit-progress.mjs";
 import { renderVerificationProgress, startVerificationProgressObserver } from "../cli/progress-observer.mjs";
+import { readUnitDiagnostics, firstReportDiagnostics, renderDiagnosticText } from "../cli/diagnostics.mjs";
 import {
   ApprovalLeaseStore,
   approvalLeaseScope,
@@ -713,7 +714,8 @@ async function executeFamilyImpl(
       ? failureFirstSummary([structuredFailureSummary(params.action, rawReport, reportPath), reportReadError, isVerify ? "" : output].filter(Boolean).join("\n"))
       : "";
     const presentationOutput = isDoctor ? doctorPresentation : output;
-    const bounded = await boundedOutput(presentationOutput, failureSummary, resultEnvelope, isVerify, isDoctor ? false : upstreamOutputTruncated);
+    const diagnosticText = renderDiagnosticText(isUnit ? readUnitDiagnostics(reportPath) : firstReportDiagnostics(rawReport));
+    const bounded = await boundedOutput(presentationOutput, [diagnosticText, failureSummary].filter(Boolean).join("\n"), resultEnvelope, isVerify, isDoctor ? false : upstreamOutputTruncated);
     const interruptionText = renderInterruptionProjection(interruption);
     if (interruptionText) bounded.text = `${bounded.text}\n\n${interruptionText}`;
     resultEnvelope = bounded.resultEnvelope;

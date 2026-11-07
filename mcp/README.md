@@ -83,6 +83,15 @@ order), known leaked resource types, and structured assertion completion. It
 never copies arbitrary error text or changes the Result Envelope. In particular,
 passed assertions followed by exit 1 remain `INCONCLUSIVE / unknown`.
 
+The first result also includes a normalized `res://` source path and line when
+Godot supplies an adjacent project location, with fixed parse/compile/runtime
+error descriptions. Arbitrary engine messages stay in private logs. Unit retains
+its quiet child output beside the exact report as `.engine-stdout.log` and
+`.engine-stderr.log`, with a bounded `.diagnostics.json` companion. These hints
+remain available when the Unit report is missing or incomplete and never qualify
+a Verdict. `diagnostics.engine` and failed Verify stage diagnostics cite these
+files; read them via their local paths, not the session-only `gdeck_log` ID.
+
 Verify reports retain failed/error-bearing stage wrapper stdout/stderr under the
 invocation's private evidence namespace, with `0600` files, hashes and truncation
 disclosure. These stage logs use the CLI's decoded UTF-8 streams; MCP log pages
@@ -157,6 +166,12 @@ event history and final assertions; this release does not bound event storage.
 `godot/tests/runtime_clock_test.gd` compares equal simulation steps under different
 wall-clock delays. Install the matching `runtime_probe.gd` and prepare a fresh
 project's import/class cache with structured `check` before direct Unit execution.
+
+`godot/tests/scenario_state_test.gd` covers latest-state waits, explicit failure
+conditions, request identity, legacy event windows, incremental scanning and
+input release. The real-Godot smoke suite installs it alongside the existing
+clock and event-window suites, and checks source diagnostics for both terminal
+test-load failures and an incomplete Unit runner failure.
 
 ## Write semantics
 

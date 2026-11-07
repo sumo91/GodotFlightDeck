@@ -1,11 +1,11 @@
 {
   "name": "godot-flight-deck-mcp",
-  "version": "1.6.6",
+  "version": "1.6.7",
   "private": true,
   "description": "MCP server exposing GodotFlightDeck gdeck_* tool families to ZCode and other MCP clients",
   "type": "module",
   "scripts": {
-    "test": "node --test contract.test.mjs result.test.mjs supervisor.test.mjs session.test.mjs diagnostics.test.mjs plan-diagnostics.test.mjs",
+    "test": "node --test contract.test.mjs result.test.mjs supervisor.test.mjs session.test.mjs diagnostics.test.mjs plan-diagnostics.test.mjs capture.test.mjs",
     "test:godot": "node --test smoke.test.mjs"
   },
   "bin": {

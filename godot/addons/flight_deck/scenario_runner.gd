@@ -17,6 +17,8 @@ var failure_kind := "none"
 var failure_details: Dictionary = {}
 var assertion_results: Array[Dictionary] = []
 var active_actions: Dictionary = {}
+var mouse_pressed := false
+var mouse_position := Vector2.ZERO
 var trace_events := false
 
 func load_file(path: String) -> bool:
@@ -133,11 +135,26 @@ func tick(probe: Node) -> void:
 		if not where_value is Dictionary:
 			_fail("Step %d wait_event where must be an object" % current_step)
 			return
+		if step.has("fail_where") and not step.fail_where is Dictionary:
+			_fail("Step %d wait_event fail_where must be an object" % current_step)
+			return
 		var where: Dictionary = where_value
 		var timeout := maxi(1, int(step.get("timeout_frames", 600)))
 		var required_count := maxi(1, int(step.get("count_gte", 1)))
 		# Events are append-only. Retain the window for timeout diagnostics, but
 		# never revisit its old events while waiting for new matches.
+		if step.has("fail_where"):
+			var failed_index: int = probe.find_semantic_event(event_name, step.fail_where, step_event_cursor)
+			if failed_index >= 0:
+				failure_details = {
+					"kind": "wait_event_failed", "step_index": current_step, "event": event_name,
+					"event_index": failed_index, "event_window_start": step_event_offset,
+					"event_window_end": probe.semantic_events.size(),
+					"fail_where": probe._bounded_diagnostic_value(step.fail_where),
+					"actual": probe._bounded_diagnostic_value(probe.semantic_events[failed_index]),
+				}
+				_fail("Step %d matched failure for event '%s'" % [current_step, event_name], "expectation")
+				return
 		step_event_matches += probe.count_semantic_events(event_name, where, step_event_cursor)
 		step_event_cursor = probe.semantic_events.size()
 		var matches_in_window: int = step_event_matches
@@ -160,6 +177,34 @@ func tick(probe: Node) -> void:
 			if trace_events or bool(step.get("traceEvents", false)):
 				failure_details["trace"] = _event_trace_summary(probe, event_name, where)
 			_fail("Step %d timed out waiting for event '%s'" % [current_step, event_name], "expectation")
+		return
+
+	if step.has("wait_state"):
+		var state_name = step.wait_state
+		var where = step.get("where", {})
+		if not state_name is String or state_name.is_empty() or not where is Dictionary:
+			_fail("Step %d wait_state needs a non-empty name and an object where" % current_step)
+			return
+		if step.has("fail_where") and not step.fail_where is Dictionary:
+			_fail("Step %d wait_state fail_where must be an object" % current_step)
+			return
+		var snapshot: Dictionary = probe.semantic_states.get(state_name, {})
+		var available := not snapshot.is_empty()
+		var failed: bool = available and step.has("fail_where") and probe._payload_matches(snapshot.payload, step.fail_where)
+		if not failed and available and probe._payload_matches(snapshot.payload, where):
+			_complete_step(probe)
+			return
+		step_frame += 1
+		if failed or step_frame >= maxi(1, int(step.get("timeout_frames", 600))):
+			failure_details = {
+				"kind": "wait_state_failed" if failed else "wait_state_timeout",
+				"step_index": current_step, "state": state_name, "available": available,
+				"where": probe._bounded_diagnostic_value(where),
+				"actual": probe._bounded_diagnostic_value(snapshot),
+			}
+			if failed:
+				failure_details["fail_where"] = probe._bounded_diagnostic_value(step.fail_where)
+			_fail("Step %d %s state '%s'" % [current_step, "matched failure for" if failed else "timed out waiting for", state_name], "expectation")
 		return
 
 	if step.has("command"):
@@ -233,7 +278,7 @@ func _event_trace_summary(probe: Node, event_name: String, where: Dictionary) ->
 func _complete_step(probe: Node) -> void:
 	var completed_step = steps[current_step]
 	probe.event("scenario_step_completed", {"index": current_step})
-	preserve_event_offset_for_next_wait = completed_step is Dictionary and not completed_step.has("wait_event")
+	preserve_event_offset_for_next_wait = completed_step is Dictionary and not completed_step.has("wait_event") and not completed_step.has("wait_state")
 	current_step += 1
 	step_frame = 0
 	if not preserve_event_offset_for_next_wait:
@@ -307,12 +352,15 @@ func _release_action(action_name: String) -> void:
 	active_actions.erase(action_name)
 
 func _move_mouse_to(position: Vector2) -> void:
+	mouse_position = position
 	var motion := InputEventMouseMotion.new()
 	motion.position = position
 	motion.global_position = position
 	Input.parse_input_event(motion)
 
 func _press_mouse_at(position: Vector2) -> void:
+	mouse_position = position
+	mouse_pressed = true
 	Input.warp_mouse(position)
 	var button := InputEventMouseButton.new()
 	button.button_index = MOUSE_BUTTON_LEFT
@@ -322,9 +370,12 @@ func _press_mouse_at(position: Vector2) -> void:
 	Input.parse_input_event(button)
 
 func _release_mouse() -> void:
+	mouse_pressed = false
 	var button := InputEventMouseButton.new()
 	button.button_index = MOUSE_BUTTON_LEFT
 	button.pressed = false
+	button.position = mouse_position
+	button.global_position = mouse_position
 	Input.parse_input_event(button)
 
 func _scroll_at(position: Vector2, factor: float) -> void:
@@ -347,6 +398,8 @@ func _release_all_actions() -> void:
 	for action_name in active_actions.keys():
 		_release_action(str(action_name))
 	active_actions.clear()
+	if mouse_pressed:
+		_release_mouse()
 
 func _fail(reason: String, kind: String = "precondition") -> void:
 	_release_all_actions()

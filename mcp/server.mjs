@@ -45,6 +45,7 @@ export const SERVICE_INFO = Object.freeze({
     "godot/addons/flight_deck/scenario_runner.gd",
     "godot/addons/flight_deck/runtime_probe.gd", "cli/process-runner.mjs", "cli/verification-plan.mjs",
     "cli/plan-diagnostics.mjs", "cli/diagnostics.mjs", "cli/runtime-clock.mjs",
+    "cli/result-envelope.mjs", "cli/evidence-journal.mjs",
   ].map(path => readFileSync(join(TOOL_ROOT, path))))).digest("hex"),
   startedAt: new Date().toISOString(), processId: process.pid,
 });

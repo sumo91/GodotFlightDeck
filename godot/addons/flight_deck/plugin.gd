@@ -1,7 +1,7 @@
 @tool
 extends EditorPlugin
 
-const VERSION := "1.6.6"
+const VERSION := "1.6.7"
 const EditorBridge := preload("res://addons/flight_deck/editor_bridge.gd")
 
 var bridge: FlightDeckEditorBridge

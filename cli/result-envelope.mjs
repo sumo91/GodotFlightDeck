@@ -176,6 +176,18 @@ function structuredStageFact(stage) {
       });
     }
     const details = scenario?.failure_details;
+    if (scenario.failure_kind === 'expectation' && ['wait_event_failed', 'wait_state_failed', 'wait_state_timeout'].includes(details?.kind)) {
+      return fact('scenario_expectation', 'structured_report', details.kind === 'wait_state_timeout'
+        ? 'Scenario state expectation exceeded its declared frame window'
+        : 'Scenario matched its explicitly declared failure condition', {
+        actual: compactObject([
+          ['stepIndex', finite(details.step_index) ? details.step_index : undefined],
+          ['event', boundedText(details.event, 160) || undefined],
+          ['state', boundedText(details.state, 160) || undefined],
+          ['stateAvailable', typeof details.available === 'boolean' ? details.available : undefined],
+        ]),
+      });
+    }
     if (details?.kind === 'wait_event_timeout') {
       return fact('scenario_expectation', 'structured_report', 'Scenario event expectation exceeded its declared frame window', {
         expected: compactObject([

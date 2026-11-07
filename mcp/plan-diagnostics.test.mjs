@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveVerificationPlan, assertVerificationPlanDigest, verificationPlanSummary } from '../cli/verification-plan.mjs';
+import { createVerificationJournal, appendVerificationJournalRecord, closeVerificationJournal, readVerificationJournal } from '../cli/evidence-journal.mjs';
 
 test('drift diagnostics follow the frozen dependency/config scope and exclude generated reports', () => {
   const project = mkdtempSync(join(tmpdir(), 'gdeck-plan-diagnostics-'));
@@ -51,4 +52,30 @@ test('drift diagnostics follow the frozen dependency/config scope and exclude ge
       return true;
     });
   } finally { rmSync(project, { recursive: true, force: true }); }
+});
+
+test('an incomplete Unit report remains a recorded inconclusive outcome, not a journal write error', () => {
+  const project = mkdtempSync(join(tmpdir(), 'gdeck-incomplete-journal-'));
+  let writer;
+  try {
+    mkdirSync(join(project, '.gdeck'), { recursive: true });
+    mkdirSync(join(project, 'tests'));
+    writeFileSync(join(project, 'project.godot'), 'config_version=5\n');
+    writeFileSync(join(project, 'tests/example_test.gd'), 'extends Node\n');
+    writeFileSync(join(project, '.gdeck/config.json'), JSON.stringify({ verificationProfiles: { fast: { unit: 'auto' } } }));
+    const plan = resolveVerificationPlan({ project, outputPath: join(project, '.gdeck/reports/verify.json'),
+      invocationIdentity: 'b'.repeat(64), verificationProfile: 'fast' });
+    writer = createVerificationJournal(plan);
+    const stage = plan.stages.find(item => item.kind === 'unit');
+    appendVerificationJournalRecord(writer, 'preflight_completed', {}, 1);
+    appendVerificationJournalRecord(writer, 'stage_started', { ordinal: 1, total: 1, stageId: stage.id }, 2);
+    appendVerificationJournalRecord(writer, 'stage_terminal', { ordinal: 1, stageId: stage.id, state: 'failed', report: null,
+      outcome: { classification: 'report_incomplete', source: 'preflight' } }, 3);
+    const read = readVerificationJournal(plan.evidenceBinding.journalPath);
+    assert.equal(read.integrity, 'valid');
+    assert.equal(read.records.at(-1).payload.outcome.classification, 'report_incomplete');
+  } finally {
+    if (writer) closeVerificationJournal(writer);
+    rmSync(project, { recursive: true, force: true });
+  }
 });

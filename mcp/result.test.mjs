@@ -114,3 +114,22 @@ test('missing reports and incomplete Unit reports cannot pass even on exit zero'
     assert.equal(result.isError, true);
   }
 });
+
+test('explicit wait failures are typed expectations; malformed definitions remain inconclusive', () => {
+  for (const [kind, failureKind, verdict] of [
+    ['wait_event_failed', 'expectation', 'FAILED'],
+    ['wait_state_failed', 'expectation', 'FAILED'],
+    ['wait_state_timeout', 'expectation', 'FAILED'],
+    ['wait_state_failed', 'precondition', 'INCONCLUSIVE'],
+  ]) {
+    const reportPath = scenarioReport(false);
+    writeFileSync(reportPath, JSON.stringify({ scenario: { status: 'failed', failure_kind: failureKind,
+      assertions: [], failure_details: { kind, step_index: 2, state: 'travel', available: false } } }));
+    const result = present('scenario', { status: 1 }, { reportPath });
+    assert.equal(result.structuredContent.resultEnvelope.verdict, verdict, kind);
+    if (failureKind === 'expectation') {
+      assert.equal(result.structuredContent.resultEnvelope.evidence[0].actual.stepIndex, 2);
+      assert.equal(result.structuredContent.resultEnvelope.failureClassification.code, 'scenario_expectation');
+    }
+  }
+});

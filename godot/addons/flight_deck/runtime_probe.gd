@@ -5,7 +5,7 @@ extends Node
 
 signal command_requested(command_name: String, payload: Dictionary)
 
-const VERSION := "1.6.6"
+const VERSION := "1.6.7"
 const DIAGNOSTIC_EVENT_LIMIT := 10
 const DIAGNOSTIC_COLLECTION_LIMIT := 16
 const DIAGNOSTIC_STRING_LIMIT := 256
@@ -39,6 +39,7 @@ var sample_count := 0
 var performance_timing_samples: Array[Dictionary] = []
 var performance_slowest_frames: Array[Dictionary] = []
 var semantic_events: Array[Dictionary] = []
+var semantic_states: Dictionary = {}
 var scenario_runner: FlightDeckScenarioRunner
 var query_definitions: Array[Dictionary] = []
 var query_results: Array[Dictionary] = []
@@ -129,6 +130,12 @@ func event(event_name: String, payload: Dictionary = {}) -> void:
 
 func is_active() -> bool:
 	return target_frames >= 0
+
+## Latest project-declared snapshot, not an event history. Inactive in normal play.
+func state(state_name: String, payload: Dictionary = {}) -> void:
+	if not is_active() or state_name.is_empty():
+		return
+	semantic_states[state_name] = {"frame": current_frame, "payload": payload.duplicate(true)}
 
 func run_seed() -> int:
 	return random_seed_value

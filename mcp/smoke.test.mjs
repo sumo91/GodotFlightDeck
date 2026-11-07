@@ -89,10 +89,27 @@ test('MCP calls reach Godot with correct types, preview, commit, undo and explic
     assert.ok(readFileSync(logPath).length > 0);
     if (process.platform !== 'win32') assert.equal(statSync(logPath).mode & 0o777, 0o600);
     rmSync(failingTest);
-    for (const name of ['runtime_clock_test.gd', 'semantic_event_window_test.gd']) {
+    for (const name of ['runtime_clock_test.gd', 'semantic_event_window_test.gd', 'scenario_state_test.gd']) {
       copyFileSync(join(dirname(serverPath), '..', 'godot', 'tests', name), join(project, 'tests', name));
     }
     await call('gdeck_validate', { action: 'unit', timeout: 30 });
+    const parseFailure = join(project, 'tests', 'parse_failure_test.gd');
+    writeFileSync(parseFailure, 'extends FlightDeckTest\nfunc test_parse() -> void:\n\tvar broken =\n');
+    for (const action of ['unit', 'verify']) {
+      const failure = await call('gdeck_validate', { action, ...(action === 'verify' ? { profile: 'fast' } : {}), timeout: 30 }, true);
+      assert.match(text(failure), /res:\/\/tests\/parse_failure_test.gd:3/);
+      assert.equal(failure.structuredContent.resultEnvelope.verdict, 'INCONCLUSIVE');
+      assert.equal(failure.structuredContent.diagnostics.engine.firstIssue.source.line, 3);
+    }
+    rmSync(parseFailure);
+    const runnerPath = join(project, 'addons', 'flight_deck', 'unit_runner.gd');
+    const savedRunner = readFileSync(runnerPath);
+    writeFileSync(runnerPath, 'extends SceneTree\nvar broken =\n');
+    const incomplete = await call('gdeck_validate', { action: 'unit', timeout: 30 }, true);
+    assert.equal(incomplete.structuredContent.resultEnvelope.verdict, 'INCONCLUSIVE');
+    assert.equal(incomplete.structuredContent.report.state, 'invalid');
+    assert.match(text(incomplete), /res:\/\/addons\/flight_deck\/unit_runner.gd:2/);
+    writeFileSync(runnerPath, savedRunner);
     // Deliberately mutate this test-owned source dependency from the immutable
     // test execution. Passing assertions must be rejected for the changed source.
     const dependency = join(project, 'dependency.gd');

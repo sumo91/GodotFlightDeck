@@ -3,6 +3,15 @@
 Changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics.
 This fork is **not** a byte-identical upstream release.
 
+## 1.6.7 (2026-11-07 — diagnostics and scenario improvements)
+
+- Add normalized project source locations to bounded engine diagnostics. Preserve quiet Unit engine logs separately, including when terminal reports are unavailable; MCP and Pi surface the hint without promoting logs to Verdict evidence.
+- Add opt-in `fail_where` to event waits, preserving existing windows and incremental cursors. Add `FlightDeckProbe.state()` and `wait_state` for latest project-declared snapshots; failure conditions take precedence and release held inputs.
+- Stage Capture output beside its destination. Publish only a matching successful report and PNG; failed or timed-out attempts preserve existing images.
+- Accept `report_incomplete` in the verification journal, avoiding a secondary `report_io` classification for interrupted Unit evidence. Include the journal and Result Envelope implementation in MCP service build identities.
+- Preserve the local MCP argument contract, response limits, private logs, cancellation/disconnect cleanup, finite long calls, runtime clocks and event-window regression coverage. The CLI, MCP and addon versions are aligned at 1.6.7; deployment uses the local package.
+- Validation on macOS / Godot 4.7.2: 52 Node tests and the real-Godot MCP smoke passed. An isolated GreyRanger `45768db` snapshot passed `fast` (123 tests / 4,943 assertions); real mouse input moved all four party units. Blocked-input event/state controls failed on the next frame, source diagnostics identified an injected error at line 3, and a Capture timeout preserved the prior PNG hash. The original game worktree was unchanged. Cross-platform execution, long soaks, performance budgets and exports were not revalidated.
+
 ## 1.6.6 (2026-11-06 — GreyRanger feedback revisions)
 
 - Match MCP arguments to the CLI contract: init timeouts stay in the MCP supervisor, template actions use their CLI names, and runtime profiles remain positional.

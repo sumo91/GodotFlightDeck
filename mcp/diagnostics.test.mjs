@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { diagnosticHints, assertionCompletion } from '../cli/diagnostics.mjs';
+import { diagnosticHints, assertionCompletion, writeUnitDiagnostics, readUnitDiagnostics, renderDiagnosticText } from '../cli/diagnostics.mjs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { withRuntimeClockMetadata } from '../cli/runtime-clock.mjs';
 
 test('clock metadata follows actual engine arguments, not user arguments or assumed scenario names', () => {
@@ -26,4 +29,38 @@ test('assertion completion is separate from process exit and missing/incomplete 
   assert.equal(assertionCompletion('scenario', { scenario: { status: 'passed', steps_completed: 3, steps_total: 3, assertions: [{ passed: true }] } }).passed, true);
   assert.deepEqual(assertionCompletion('scenario', null), { state: 'unavailable' });
   assert.equal(assertionCompletion('scenario', { scenario: { status: 'passed', steps_completed: 'private payload', steps_total: 1 } }).stepsCompleted, null);
+});
+
+test('engine source locations belong to the adjacent first error and omit arbitrary messages', () => {
+  const result = diagnosticHints({ stderr: 'SCRIPT ERROR: Parse Error: secret=value\n          at: GDScript::reload (res://scripts/主界面.gd:42)\nERROR: Failed to load script\n' });
+  assert.deepEqual(result.firstIssue.source, { path: 'res://scripts/主界面.gd', line: 42 });
+  assert.equal(result.firstIssue.errorKind, 'parse');
+  assert.match(renderDiagnosticText(result), /res:\/\/scripts\/主界面.gd:42/);
+  assert.doesNotMatch(JSON.stringify(result), /secret=value/);
+  for (const location of ['res://../private.gd:1', 'res://.gdeck/token.gd:1', '/private/secret.gd:1', 'res://a.gd:0']) {
+    assert.equal(diagnosticHints({ stderr: `SCRIPT ERROR: failed\n at: (${location})\n` }).firstIssue.source, undefined);
+  }
+  assert.equal(diagnosticHints({ stderr: 'ERROR: first\nSCRIPT ERROR: second\n at: (res://second.gd:3)\n' }).firstIssue.source, undefined);
+  assert.equal(diagnosticHints({ stderr: 'ERROR: first', stdout: ' at: (res://different-stream.gd:3)\n' }).firstIssue.source, undefined);
+});
+
+test('quiet Unit diagnostics survive missing reports, keep private logs, and reject unrelated sidecars', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'gdeck-unit-diagnostics-'));
+  const report = join(directory, 'missing-report.json');
+  try {
+    const stderr = 'SCRIPT ERROR: Compile Error: private payload\n at: (res://tests/example_test.gd:9)\n';
+    writeUnitDiagnostics(report, { stdout: '', stderr, outputTruncated: true });
+    const saved = readUnitDiagnostics(report);
+    assert.equal(saved.firstIssue.source.line, 9);
+    assert.equal(saved.logs.complete, false);
+    assert.equal(readFileSync(saved.logs.streams.stderr.path, 'utf8'), stderr);
+    assert.doesNotMatch(JSON.stringify(saved), /private payload/);
+    if (process.platform !== 'win32') assert.equal(statSync(saved.logs.streams.stderr.path).mode & 0o777, 0o600);
+    assert.throws(() => writeUnitDiagnostics(report, { stderr }), /EEXIST/);
+    const path = `${report}.diagnostics.json`;
+    const malformed = JSON.parse(readFileSync(path, 'utf8'));
+    malformed.logs.streams.stderr.path = '/private/other.log';
+    writeFileSync(path, JSON.stringify(malformed));
+    assert.equal(readUnitDiagnostics(report), null);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

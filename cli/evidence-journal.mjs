@@ -45,7 +45,7 @@ const TERMINAL_STATES = new Set(['passed', 'failed', 'skipped', 'blocked', 'canc
 const CLASSIFICATIONS = new Set([
   'unit_assertion', 'visual_regression', 'performance_budget', 'scenario_assertion', 'export_integrity',
   'configuration', 'precondition', 'fixture_isolation', 'plan_drift', 'report_io', 'report_missing',
-  'report_corrupt', 'process_spawn', 'timeout', 'cleanup_timeout', 'cancelled', 'unknown',
+  'report_corrupt', 'report_incomplete', 'process_spawn', 'timeout', 'cleanup_timeout', 'cancelled', 'unknown',
 ]);
 const SOURCES = new Set(['structured_report', 'preflight', 'process_result']);
 const AGGREGATE_VERDICTS = new Set(['PASSED', 'FAILED', 'INCONCLUSIVE', 'CANCELLED']);

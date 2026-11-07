@@ -48,7 +48,8 @@ import {
 } from './evidence-journal.mjs';
 import { buildEvidenceIndex } from './evidence-index.mjs';
 import { formatScenarioLintWarnings, lintScenarioDefinition } from './scenario-lint.mjs';
-import { diagnosticHints, assertionCompletion, boundedProcessTimings, boundedClockReport } from './diagnostics.mjs';
+import { diagnosticHints, assertionCompletion, boundedProcessTimings, boundedClockReport,
+  writeUnitDiagnostics, readUnitDiagnostics, firstReportDiagnostics, renderDiagnosticText } from './diagnostics.mjs';
 import { planDriftDiagnostics } from './plan-diagnostics.mjs';
 import { withRuntimeClockMetadata } from './runtime-clock.mjs';
 import {
@@ -2845,32 +2846,53 @@ function captureProject(positional, options, internalStage = null) {
   const frames = Number(runtime?.frames ?? options.frames ?? profile?.frames ?? 30);
   const seedValue = Number(runtime?.seed ?? options.seed ?? profile?.seed ?? 42);
   const output = resolve(options.output ?? join(project, '.gdeck', 'captures', `${profileName}-${timestamp()}.png`));
-  const report = join(project, '.gdeck', 'reports', `${profileName}-${timestamp()}.json`);
+  const report = join(project, '.gdeck', 'reports', `${profileName}-${timestamp()}-${randomBytes(6).toString('hex')}.json`);
   mkdirSync(dirname(output), { recursive: true });
   mkdirSync(dirname(report), { recursive: true });
   const profileUserArgs = runtime?.profileUserArgs ?? profile.userArgs ?? [];
   ensureFixtureAdapterIsProfileDeclared(profileUserArgs);
   const fixtureAdapter = runtime?.fixtureAdapter ?? fixtureAdapterFor(project, profile);
-  const userArgs = [
-    ...profileUserArgs,
-    ...(fixtureAdapter ? [`--gdeck-fixture-adapter=${fixtureAdapter}`] : []),
-    `--gdeck-capture=${output}`,
-    `--gdeck-report=${report}`,
-    `--gdeck-after-frames=${frames}`,
-    `--gdeck-seed=${seedValue}`,
-  ];
-  const result = runProfileGodot(godot, ['--path', executionProject, '--fixed-fps', '60', '--', ...userArgs], {
-    cwd: executionProject, timeoutMs: timeoutMilliseconds(options), phase: 'capture',
-  }, fixtureAdapter);
-  const failed = result.status !== 0 || ERROR_PATTERN.test(result.output) || !existsSync(output);
-  if (failed) {
-    console.error(color.red('Capture failed'));
-    return processStatusOr(result);
+  const staging = mkdtempSync(join(dirname(output), '.gdeck-capture-'));
+  const stagedImage = join(staging, 'capture.png');
+  const stagedReport = join(staging, 'report.json');
+  let publishedReport = false;
+  let publishedImage = false;
+  try {
+    const userArgs = [
+      ...profileUserArgs,
+      ...(fixtureAdapter ? [`--gdeck-fixture-adapter=${fixtureAdapter}`] : []),
+      `--gdeck-capture=${stagedImage}`,
+      `--gdeck-report=${stagedReport}`,
+      `--gdeck-after-frames=${frames}`,
+      `--gdeck-seed=${seedValue}`,
+    ];
+    const result = runProfileGodot(godot, ['--path', executionProject, '--fixed-fps', '60', '--', ...userArgs], {
+      cwd: executionProject, timeoutMs: timeoutMilliseconds(options), phase: 'capture',
+    }, fixtureAdapter);
+    const failed = result.status !== 0 || ERROR_PATTERN.test(result.output) || !existsSync(stagedImage) || !existsSync(stagedReport);
+    if (failed) {
+      console.error(color.red('Capture failed'));
+      return processStatusOr(result);
+    }
+    const data = JSON.parse(readFileSync(stagedReport, 'utf8'));
+    const image = readFileSync(stagedImage);
+    if (data.capture !== stagedImage || data.capture_error !== 0
+      || image.length < 24 || !image.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) {
+      throw new Error('Capture did not produce a matching successful report and PNG');
+    }
+    data.capture = output;
+    writeFileAtomicNoReplace(report, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+    publishedReport = true;
+    renameSync(stagedImage, output);
+    publishedImage = true;
+    console.log(color.green('Capture complete'));
+    console.log(`  Image:  ${output}`);
+    console.log(`  Report: ${report}`);
+    return 0;
+  } finally {
+    if (publishedReport && !publishedImage) rmSync(report, { force: true });
+    rmSync(staging, { recursive: true, force: true });
   }
-  console.log(color.green('Capture complete'));
-  console.log(`  Image:  ${output}`);
-  console.log(`  Report: ${report}`);
-  return 0;
 }
 
 function scenarioFile(project, candidate) {
@@ -3240,6 +3262,12 @@ function runUnitTests(projectCandidate, options, internalStage = null, directUni
   const result = runSync(godot, args, {
     cwd: executionProject, timeoutMs, phase: 'unit', quiet: true,
   });
+  if (result.status !== 0 || ERROR_PATTERN.test(result.output)) {
+    const diagnostics = writeUnitDiagnostics(report, result);
+    const hint = renderDiagnosticText(diagnostics);
+    if (hint) console.error(hint);
+    console.error(`Engine logs: ${diagnostics.logs.streams.stdout.path}; ${diagnostics.logs.streams.stderr.path}`);
+  }
   if (!existsSync(report)) {
     console.error(color.red('Unit tests failed without producing a report'));
     return processStatusOr(result);
@@ -4058,6 +4086,7 @@ function executeVerificationCommand(planned, plan, executionProject) {
     rmSync(`${outcomePath}.timings`, { force: true });
   }
   const diagnostics = diagnosticHints(result);
+  const engine = planned.kind === 'unit' ? readUnitDiagnostics(planned.reportPath) : null;
   // Retain failures and error/leak hints without putting raw payloads into reports.
   const logStreams = {};
   if (result.status !== 0 || diagnostics.firstIssue) {
@@ -4076,7 +4105,7 @@ function executeVerificationCommand(planned, plan, executionProject) {
   }
   return {
     exitCode: result.status,
-    diagnostics: { ...diagnostics, logs: { streams: logStreams, complete: !result.outputTruncated, encoding: 'utf8_decoded', retained: Object.keys(logStreams).length > 0 } },
+    diagnostics: { ...diagnostics, ...(engine ? { engine } : {}), logs: { streams: logStreams, complete: !result.outputTruncated, encoding: 'utf8_decoded', retained: Object.keys(logStreams).length > 0 } },
     durationMs: Number(process.hrtime.bigint() - started) / 1_000_000,
     outputTail: planned.kind === 'doctor'
       ? boundedDoctorVerificationOutput(result.stdout)
@@ -4620,6 +4649,8 @@ function publishVerificationPreflightFailure(
   writeFileAtomicNoReplace(output, reportJson);
   assertVerificationPublicationDirectory(reportDirectoryIdentity);
   printVerificationReportReceipt(plan, output, reportJson);
+  const hint = renderDiagnosticText(firstReportDiagnostics(report));
+  if (hint) console.error(hint);
   return report;
   } catch (publicationError) {
     if (markdownIdentity) {
@@ -5217,6 +5248,8 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
     throw reportIoFailure('Cannot publish verification aggregate artifacts', publicationError);
   }
   console.log(`\n${renderResultEnvelopeText(report.resultEnvelope)}`);
+  const hint = renderDiagnosticText(firstReportDiagnostics(report));
+  if (hint) console.error(hint);
   console.log(`\n${report.status === 'passed' ? color.green('Verification passed') : color.red('Verification failed')}`);
   console.log(`  Stages:   ${report.summary.passed} passed, ${report.summary.skipped} skipped, ${report.summary.failed} failed`);
   console.log(`  JSON:     ${output}`);
