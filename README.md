@@ -191,6 +191,35 @@ gdeck scenario full-loop /path/to/project --profile smoke
 
 `wait_event` 同样支持可选的 `fail_where`，匹配同名事件且沿用原有事件窗口和增量游标。两个条件独立匹配；异步请求应在成功与失败条件中都写同一个请求 ID。一次更新同时满足成功和失败条件时，失败优先，并立即释放测试持有的按键和鼠标。没有 `fail_where` 的旧用例保持原语义。`wait_state` 检查当前状态，不使用事件历史或 `since`；需要保证属于本次操作时，用请求 ID 区分。
 
+### 同次运行 A/B 截图
+
+在场景已就绪的 Scenario 中加入 `capture_ab` 步骤，通过原有 `gdeck_validate(action="scenario", name="…", project="…")` 调用：
+
+```json
+{
+  "capture_ab": {
+    "name": "player-locator",
+    "changes": [{ "path": "HUD/PlayerLocator", "property": "visible", "value": false }]
+  }
+}
+```
+
+`path` 相对于当前主场景。A 使用当前属性，B 使用声明的值。探针在同一游戏进程内暂停场景树、禁用节点处理，等待完整渲染后依次截取 A、B 和恢复原属性后的还原图，然后恢复节点处理模式与原暂停状态。测试持有的输入会先释放；不会保存场景或资源文件。
+
+支持的临时视觉属性：
+
+- CanvasItem：`visible`、`modulate`、`self_modulate`（颜色为四个 0–1 数值）。Node3D：`visible`。
+- Camera3D：`position`、`rotation_degrees`（三维数组）、`fov`、`size`。
+- Camera2D：`position`、`offset`、`zoom`（二维数组，zoom 必须为正）。
+
+运行 profile 必须声明隔离的 `fixtureAdapter`；每个场景最多四组对照，每组最多八项改动，主视口最多 8,388,608 像素。用一个改动开始，便于解释画面差异。
+
+只有整次场景运行成功、五张图片的尺寸与哈希正确，才把整组目录发布到 `.gdeck/captures/`。每组提供 `a.png`、`b.png`、`restored.png`、`side_by_side.png`（左 A、右 B）、`diff.png` 和 `comparison.json`。报告记录属性改动、游戏进程 ID、探针帧、像素差异比例与恢复检查；MCP/Pi 和 Verify 返回有界摘要及产物路径。旧产物不会被覆盖，超时和取消沿用原有进程清理机制。
+
+可比性检查覆盖节点集合与处理模式、主视口、当前相机的非目标属性和已声明的语义状态；还原图必须与 A 逐像素一致。项目还可在测试适配器实现只读的 `gdeck_capture_state() -> String`，返回待保护游戏状态的稳定摘要（非空且不超过 4096 字符），例如单位位置、模拟时间与项目 RNG 状态的 JSON 哈希。每个截图阶段都会重新读取并比较它。
+
+暂停节点不能冻结所有外部回调、网络或 shader TIME；工具不自动回滚整个游戏或全局 RNG。检测到状态漂移、还原图变化或发布失败时返回 `INCONCLUSIVE`，不发布对照图。图片差异本身不是失败判据，`PASSED` 表示场景步骤与断言完成，不代表画面已被批准。截图与图像处理的耗时也会进入场景墙钟计时；性能预算应使用不含截图步骤的场景。
+
 ### `gdeck baseline` 与 `gdeck visual-test`
 
 建立可提交到项目仓库的视觉基准，并在后续修改中自动比较：

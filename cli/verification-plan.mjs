@@ -872,7 +872,7 @@ export function resolveVerificationPlan(options = {}) {
   fingerprints.push(sourceTree.fingerprint, sourceTree.uidFingerprint);
   const preparation = {
     godotImportRequired: sourceTree.importableAssetCount > 0
-      || stages.some((stage) => stage.disposition === 'run' && stage.kind === 'unit'),
+      || stages.some((stage) => stage.disposition === 'run' && ['unit', 'scenario', 'visual', 'benchmark'].includes(stage.kind)),
     godotPath: typeof config.godotPath === 'string' ? config.godotPath : '',
   };
   const evidenceBindingCore = {

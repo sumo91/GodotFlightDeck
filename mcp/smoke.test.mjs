@@ -89,7 +89,7 @@ test('MCP calls reach Godot with correct types, preview, commit, undo and explic
     assert.ok(readFileSync(logPath).length > 0);
     if (process.platform !== 'win32') assert.equal(statSync(logPath).mode & 0o777, 0o600);
     rmSync(failingTest);
-    for (const name of ['runtime_clock_test.gd', 'semantic_event_window_test.gd', 'scenario_state_test.gd']) {
+    for (const name of ['runtime_clock_test.gd', 'semantic_event_window_test.gd', 'scenario_state_test.gd', 'capture_ab_test.gd']) {
       copyFileSync(join(dirname(serverPath), '..', 'godot', 'tests', name), join(project, 'tests', name));
     }
     await call('gdeck_validate', { action: 'unit', timeout: 30 });

@@ -1,3 +1,4 @@
+import { capturePairSummary } from '../cli/capture-ab.mjs';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, parse, relative, resolve } from 'node:path';
@@ -712,6 +713,7 @@ export function validationReportSummary(action, report, reportPath = '') {
     const scenario = report?.scenario ?? {};
     return {
       status: scenario?.status ?? report?.status,
+      ...(report?.capture_ab?.length ? { capturePairs: capturePairSummary(report.capture_ab) } : {}),
       scenario: {
         name: boundedLine(scenario?.name, 200), stepsCompleted: scenario?.steps_completed, stepsTotal: scenario?.steps_total,
         failureKind: ['expectation', 'precondition'].includes(scenario?.failure_kind) ? scenario.failure_kind : scenario?.failure ? 'unknown' : undefined,

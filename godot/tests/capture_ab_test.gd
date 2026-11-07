@@ -1,0 +1,35 @@
+extends "res://addons/flight_deck/test_case.gd"
+
+const CaptureAB = preload("res://addons/flight_deck/capture_ab.gd")
+const Diff = preload("res://addons/flight_deck/visual_diff.gd")
+
+func test_visual_patch_types_and_bounds() -> void:
+	var panel := ColorRect.new()
+	var camera := Camera3D.new()
+	assert_equal(CaptureAB._value(panel, "visible", false), {"value": false})
+	assert_equal(CaptureAB._value(panel, "modulate", [0.2, 0.3, 0.4, 1]).value, Color(0.2, 0.3, 0.4, 1))
+	assert_true(CaptureAB._value(panel, "visible", "false").is_empty())
+	assert_true(CaptureAB._value(panel, "script", null).is_empty())
+	assert_true(CaptureAB._value(panel, "modulate", [2, 0, 0, 1]).is_empty())
+	assert_equal(CaptureAB._value(camera, "position", [1, 2, 3]).value, Vector3(1, 2, 3))
+	assert_equal(CaptureAB._value(camera, "fov", 90).value, 90.0)
+	assert_true(CaptureAB._value(camera, "fov", 180).is_empty())
+	assert_true(CaptureAB._value(camera, "size", 0).is_empty())
+	assert_equal(CaptureAB._node(panel, ".."), null)
+	assert_equal(CaptureAB._node(panel, "/root"), null)
+	panel.free()
+	camera.free()
+
+func test_shared_visual_diff_preserves_pixel_metrics() -> void:
+	var a := Image.create(2, 1, false, Image.FORMAT_RGBA8)
+	a.fill(Color.RED)
+	var b := Image.create(2, 1, false, Image.FORMAT_RGBA8)
+	b.fill(Color.RED)
+	assert_equal(Diff.compare_images(a, b).changed_pixels, 0)
+	b.set_pixel(1, 0, Color.GREEN)
+	var result := Diff.compare_images(a, b)
+	assert_equal(result.changed_pixels, 1)
+	assert_equal(result.total_pixels, 2)
+	assert_equal(result.absolute_error_sum, 2.0)
+	assert_equal(result.maximum_error, 1.0)
+	assert_equal(result.image.get_size(), Vector2i(2, 1))

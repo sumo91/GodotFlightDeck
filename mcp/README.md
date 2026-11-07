@@ -173,6 +173,23 @@ input release. The real-Godot smoke suite installs it alongside the existing
 clock and event-window suites, and checks source diagnostics for both terminal
 test-load failures and an incomplete Unit runner failure.
 
+Scenario steps also accept `capture_ab: { name, changes: [{ path, property, value }] }`.
+Use the existing `gdeck_validate` scenario action with an isolated fixture profile;
+no new tool or arbitrary output path is needed. The runtime captures A, B and a
+restored A in one process, checks state/camera invariants and exact restoration,
+and creates the side-by-side image and difference heatmap. Only successful runs
+publish a complete, hash-checked bundle. `capturePairs` includes bounded metrics
+and artifact paths; private comparison reports retain the declared changes and
+control evidence. Verify preserves these artifacts and classifies uncontrolled
+comparisons as `INCONCLUSIVE / precondition`. See the root README for supported
+properties and the optional `gdeck_capture_state()` fixture guard.
+
+`capture-ab.test.mjs` exercises publication and result projection.
+`capture-ab-godot.test.mjs` covers rendered differences, no-op pairs, camera zoom,
+restoration, render drift, rejected properties, later scenario failure, timeout
+cleanup, and Verify. The shared pixel comparator is checked by
+`godot/tests/capture_ab_test.gd`; baseline comparison keeps its existing metrics.
+
 ## Write semantics
 
 Property `value` accepts native JSON numbers, booleans, strings, arrays, objects

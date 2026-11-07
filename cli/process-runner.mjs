@@ -384,7 +384,9 @@ async function lifecycleResourceIsSafe(path) {
     const temporary = parent === await realpathAsync(tmpdir())
       && LIFECYCLE_RESOURCE_PREFIXES.some((prefix) => basename(path).startsWith(prefix));
     const exportStaging = lifecycleProjectRoots.some((root) => parent === join(root, '.gdeck', 'export-staging'));
-    return temporary || exportStaging;
+    const captureStaging = /^\.gdeck-ab-[A-Za-z0-9]{6}$/.test(basename(path))
+      && lifecycleProjectRoots.some((root) => parent === join(root, '.gdeck', 'captures'));
+    return temporary || exportStaging || captureStaging;
   } catch (error) {
     return error?.code === 'ENOENT';
   }

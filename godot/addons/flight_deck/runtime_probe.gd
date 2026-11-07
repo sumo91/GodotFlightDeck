@@ -13,11 +13,15 @@ const DIAGNOSTIC_DEPTH_LIMIT := 4
 const PERFORMANCE_TIMING_SAMPLE_LIMIT := 32
 const PERFORMANCE_SLOWEST_FRAME_LIMIT := 8
 const QUERY_TREE_NODE_LIMIT := 200
+const CaptureAB = preload("res://addons/flight_deck/capture_ab.gd")
 
 var target_frames := -1
 var random_seed_value := 42
 var current_frame := 0
 var capture_path := ""
+var capture_ab_root := ""
+var capture_ab_busy := false
+var capture_ab_results: Array[Dictionary] = []
 var report_path := ""
 var scenario_path := ""
 var query_json := ""
@@ -75,7 +79,7 @@ func _ready() -> void:
 	print("GDECK_READY version=%s frames=%d" % [VERSION, target_frames])
 
 func _process(delta: float) -> void:
-	if target_frames < 0 or finishing:
+	if target_frames < 0 or finishing or capture_ab_busy:
 		return
 	current_frame += 1
 	var now_usec := Time.get_ticks_usec()
@@ -99,6 +103,8 @@ func _process(delta: float) -> void:
 		var scenario_started := Time.get_ticks_usec()
 		scenario_runner.tick(self)
 		clock_scenario_tick_usec += Time.get_ticks_usec() - scenario_started
+		if capture_ab_busy:
+			return
 		if scenario_runner.status == "passed":
 			event("scenario_completed", {"status": "passed"})
 			finishing = true
@@ -139,6 +145,24 @@ func state(state_name: String, payload: Dictionary = {}) -> void:
 
 func run_seed() -> int:
 	return random_seed_value
+
+func start_capture_ab(definition: Variant) -> void:
+	capture_ab_busy = true
+	_run_capture_ab.call_deferred(definition, scenario_runner.current_step)
+
+func _run_capture_ab(definition: Variant, step: int) -> void:
+	var result: Dictionary
+	if capture_ab_results.size() >= 4:
+		result = {"step": step, "status": "inconclusive", "reason": "pair_limit", "published": false}
+	else:
+		result = await CaptureAB.run(self, definition, step)
+	capture_ab_results.append(result)
+	if result.status == "completed":
+		scenario_runner._complete_step(self)
+	else:
+		scenario_runner.failure_details = {"kind": "capture_ab_inconclusive", "step_index": step, "reason": result.reason}
+		scenario_runner._fail("A/B capture could not establish a controlled comparison: %s" % result.reason)
+	capture_ab_busy = false
 
 func issue_command(command_name: String, payload: Dictionary = {}) -> void:
 	event("scenario_command", {"command": command_name, "payload": payload})
@@ -270,6 +294,8 @@ func _parse_arguments(args: PackedStringArray) -> void:
 	for argument in args:
 		if argument.begins_with("--gdeck-capture="):
 			capture_path = argument.trim_prefix("--gdeck-capture=")
+		elif argument.begins_with("--gdeck-capture-ab-root="):
+			capture_ab_root = argument.trim_prefix("--gdeck-capture-ab-root=")
 		elif argument.begins_with("--gdeck-report="):
 			report_path = argument.trim_prefix("--gdeck-report=")
 		elif argument.begins_with("--gdeck-scenario="):
@@ -570,6 +596,7 @@ func _write_report(capture_error: Error) -> void:
 		"clocks": _clock_report(),
 		"capture": capture_path,
 		"capture_error": capture_error,
+		"capture_ab": capture_ab_results,
 		"benchmark": benchmark_enabled,
 		"benchmark_window": {
 			"warmup_frames": benchmark_warmup_frames if benchmark_enabled else 5,

@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { pathContainsSymlink, pathIsInside } from './safety.mjs';
+import { publishCapturePairs, capturePairSummary } from './capture-ab.mjs';
 import {
   assessDoctorCapabilities, capabilityRelevanceForPlan, DOCTOR_CAPABILITY_IDS, DOCTOR_CAPABILITY_NAMES,
 } from './doctor-capabilities.mjs';
@@ -495,7 +496,9 @@ function lifecycleRegistryEvent(event, path) {
     && LIFECYCLE_TEMPORARY_PREFIXES.some((prefix) => basename(absolute).startsWith(prefix));
   const exportStagingResource = basename(dirname(absolute)) === 'export-staging'
     && basename(dirname(dirname(absolute))) === '.gdeck';
-  if (!temporaryResource && !exportStagingResource) {
+  const captureStagingResource = basename(dirname(absolute)) === 'captures'
+    && basename(dirname(dirname(absolute))) === '.gdeck' && /^\.gdeck-ab-[A-Za-z0-9]{6}$/.test(basename(absolute));
+  if (!temporaryResource && !exportStagingResource && !captureStagingResource) {
     throw new ResultClassificationError('configuration', `Lifecycle resource path is outside an allowed invocation staging namespace: ${absolute}`);
   }
   try {
@@ -2948,6 +2951,9 @@ function runScenario(positional, options, internalStage = null) {
   }
   if (typeof scenarioName !== 'string' || scenarioName.length === 0) throw new Error('Scenario name must be a non-empty string');
   ensureFixtureAdapterIsProfileDeclared([...profileUserArgs, ...scenarioUserArgs]);
+  const abSteps = (JSON.parse(readFileSync(path, 'utf8')).steps ?? []).flatMap((step, index) => step?.capture_ab !== undefined ? [index] : []);
+  if (abSteps.length > 4) throw new Error('A scenario may capture at most four A/B pairs');
+  if (abSteps.length && !fixtureAdapter) throw new Error('A/B capture requires a profile.fixtureAdapter with isolated user data');
   const godot = findGodot(config, options.godot);
   const runTimestamp = timestamp();
   const output = resolve(options.output ?? join(project, '.gdeck', 'captures', `scenario-${scenarioStem}-${runTimestamp}.png`));
@@ -2964,10 +2970,19 @@ function runScenario(positional, options, internalStage = null) {
       }
     } catch { /* lint is best-effort */ }
   }
+  const abParent = join(project, '.gdeck', 'captures');
+  if (abSteps.length && pathContainsSymlink(project, abParent)) throw new Error('A/B capture directory must not contain symbolic links');
+  if (abSteps.length) mkdirSync(abParent, { recursive: true });
+  const abStaging = abSteps.length ? mkdtempSync(join(abParent, '.gdeck-ab-')) : '';
+  const abDestination = abStaging ? join(abParent, `scenario-${scenarioStem}-${runTimestamp}-${basename(abStaging).slice(10)}-ab`) : '';
+  let abPublished = false;
+  try {
+  if (abStaging) lifecycleRegistryEvent('resource_add', abStaging);
   const userArgs = [
     ...profileUserArgs,
     ...scenarioUserArgs,
     ...(fixtureAdapter ? [`--gdeck-fixture-adapter=${fixtureAdapter}`] : []),
+    ...(abStaging ? [`--gdeck-capture-ab-root=${abStaging}`] : []),
     `--gdeck-scenario=${path}`,
     `--gdeck-report=${report}`,
     `--gdeck-after-frames=${frames}`,
@@ -2986,7 +3001,31 @@ function runScenario(positional, options, internalStage = null) {
   }
   const data = JSON.parse(readFileSync(report, 'utf8'));
   const scenarioResult = data.scenario ?? {};
-  const passed = result.status === 0 && !ERROR_PATTERN.test(result.output) && scenarioResult.status === 'passed';
+  let passed = result.status === 0 && !ERROR_PATTERN.test(result.output) && scenarioResult.status === 'passed';
+  if (abStaging) {
+    if (passed) {
+      try {
+        publishCapturePairs(data, abStaging, abDestination, abSteps);
+        abPublished = true;
+      } catch (error) {
+        passed = false;
+        scenarioResult.status = 'failed';
+        scenarioResult.failure_kind = 'precondition';
+        scenarioResult.failure = 'A/B artifact publication failed';
+        scenarioResult.failure_details = { kind: 'capture_ab_inconclusive', reason: 'publication_failed' };
+        for (const pair of data.capture_ab ?? []) { pair.published = false; delete pair.artifacts; }
+        console.error(error.message);
+      }
+    }
+    try { writeFileAtomic(report, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 }); }
+    catch (error) {
+      if (abPublished) rmSync(abDestination, { recursive: true, force: true });
+      throw error;
+    }
+    for (const pair of capturePairSummary(data.capture_ab)) {
+      console.log(`  A/B step ${pair.step}: ${pair.published ? 'published' : 'not published'}${pair.artifacts ? `; ${pair.artifacts.side_by_side}` : ''}`);
+    }
+  }
   console.log(passed ? color.green('Scenario passed') : color.red('Scenario failed'));
   console.log(`  Name:       ${scenarioResult.name ?? scenarioName}`);
   console.log(`  Steps:      ${scenarioResult.steps_completed ?? 0}/${scenarioResult.steps_total ?? 0}`);
@@ -3004,6 +3043,12 @@ function runScenario(positional, options, internalStage = null) {
   if (capturesOutput) console.log(`  Image:      ${output}`);
   console.log(`  Report:     ${report}`);
   return passed ? 0 : processStatusOr(result);
+  } finally {
+    if (abStaging) {
+      rmSync(abStaging, { recursive: true, force: true });
+      lifecycleRegistryEvent('resource_remove', abStaging);
+    }
+  }
 }
 
 function baselineProject(positional, options) {
@@ -3972,8 +4017,8 @@ function createVerificationSnapshot(plan) {
     measure('snapshot_validation', () => assertVerificationSnapshotInputs(plan, executionProject));
     mkdirSync(join(executionProject, '.godot'), { recursive: true });
     const importableAssets = verificationImportableAssetCount(executionProject);
-    const unitNeedsClassCache = plan.stages.some((stage) => stage.disposition === 'run' && stage.kind === 'unit');
-    if (plan.preparation?.godotImportRequired !== (importableAssets > 0 || unitNeedsClassCache)) {
+    const runtimeNeedsClassCache = plan.stages.some((stage) => stage.disposition === 'run' && ['unit', 'scenario', 'visual', 'benchmark'].includes(stage.kind));
+    if (plan.preparation?.godotImportRequired !== (importableAssets > 0 || runtimeNeedsClassCache)) {
       throw new ResultClassificationError('plan_drift', 'Verification import preparation no longer matches the approved Plan');
     }
     if (plan.preparation.godotImportRequired) {
@@ -4244,6 +4289,7 @@ function boundedStageReport(kind, report) {
       ...common,
       capture: boundedReportText(report.capture, 1000),
       capture_error: boundedReportNumber(report.capture_error),
+      capture_ab: capturePairSummary(report.capture_ab),
       performance,
       performance_timing: performanceTiming,
       clocks: boundedClockReport(report.clocks),
@@ -4255,7 +4301,8 @@ function boundedStageReport(kind, report) {
         steps_total: boundedReportNumber(scenario.steps_total),
         failure_kind: boundedReportEnum(scenario.failure_kind, ['expectation', 'precondition', 'error', 'none'], 'unknown'),
         failure_details: details && typeof details === 'object' ? {
-          kind: boundedReportEnum(details.kind, ['expectation', 'precondition', 'timeout', 'error'], 'unknown'),
+          kind: boundedReportEnum(details.kind, ['expectation', 'precondition', 'timeout', 'error', 'capture_ab_inconclusive'], 'unknown'),
+          ...(details.kind === 'capture_ab_inconclusive' ? { reason: boundedReportEnum(details.reason, ['invalid_definition', 'isolated_rendered_profile_required', 'invalid_viewport', 'node_missing', 'capture_failed', 'state_changed', 'change_rejected', 'restore_image_changed', 'restore_failed', 'write_failed', 'pair_limit', 'publication_failed'], 'unknown') } : {}),
           step_index: boundedReportNumber(details.step_index),
           event: boundedProjectIdentifier(details.event, 'event', 160),
           required_count: boundedReportNumber(details.required_count),

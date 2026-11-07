@@ -69,6 +69,11 @@ func tick(probe: Node) -> void:
 			_complete_step(probe)
 		return
 
+	if step.has("capture_ab"):
+		_release_all_actions()
+		probe.start_capture_ab(step.capture_ab)
+		return
+
 	if step.has("press") or step.has("hold"):
 		var action_name := str(step.get("press", step.get("hold", "")))
 		var duration := maxi(1, int(step.get("frames", 2)))

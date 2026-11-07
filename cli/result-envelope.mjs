@@ -1,3 +1,4 @@
+import { capturePairSummary } from './capture-ab.mjs';
 import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { unitReportDisposition } from './unit-progress.mjs';
@@ -154,6 +155,11 @@ function structuredStageFact(stage) {
     const scenario = report.scenario ?? report;
     if (scenario?.status !== 'failed') return null;
     const failedAssertion = (Array.isArray(scenario.assertions) ? scenario.assertions : []).find((item) => item?.passed !== true);
+    if (scenario.failure_kind === 'precondition' && scenario.failure_details?.kind === 'capture_ab_inconclusive') {
+      return fact('precondition', 'structured_report', 'A/B capture could not establish and publish a controlled comparison', {
+        actual: compactObject([['stepIndex', scenario.failure_details.step_index], ['reason', boundedText(scenario.failure_details.reason, 80)]]),
+      });
+    }
     if (scenario.failure_kind === 'precondition' || failedAssertion?.failure_kind === 'precondition') {
       return fact('precondition', 'structured_report', 'Scenario definition or declared prerequisite is invalid', {
         actual: compactObject([['assertionIndex', finite(failedAssertion?.index) ? failedAssertion.index : undefined]]),
@@ -338,6 +344,9 @@ function collectArtifacts(stages, reportPath, markdownPath, reportArtifacts = []
     record(stage?.outcome?.classification === 'report_missing' ? 'expected_stage_report' : 'stage_report', stage?.reportPath);
     const detail = stage?.report;
     record('capture', detail?.capture);
+    for (const pair of capturePairSummary(detail?.capture_ab)) {
+      if (pair.published) for (const [key, path] of Object.entries(pair.artifacts)) record(`capture_ab_${key}`, path);
+    }
     record('visual_actual', detail?.actual);
     record('visual_diff', detail?.diff);
     for (const artifact of Array.isArray(stage?.artifacts) ? stage.artifacts : []) {
