@@ -1038,7 +1038,7 @@ export function buildCliArgs(family, params, project, internal = {}) {
   }
 
   if (family === 'editor') {
-    const prefix = ['editor', action];
+    const prefix = ['editor', action, ...(internal.writeAuthorized === true && ['delete', 'resource-delete', 'cleanup-sessions'].includes(action) ? ['--apply'] : [])];
     switch (action) {
       case 'status': assertOnly(params, []); return [...prefix, project];
       case 'sessions': assertOnly(params, []); return [...prefix, project, '--json'];
@@ -1090,7 +1090,7 @@ export function buildCliArgs(family, params, project, internal = {}) {
         jsonString(params.operations, 512 * 1024);
         if (!internal.batchPath) throw new Error('Internal batch path is missing');
         const args = [...prefix, internal.batchPath, project];
-        if (params.commit !== true) args.push('--dry-run');
+        args.push(params.commit === true && internal.writeAuthorized === true ? '--apply' : '--dry-run');
         return args;
       }
       case 'undo':

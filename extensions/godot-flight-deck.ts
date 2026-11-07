@@ -503,6 +503,7 @@ async function executeFamilyImpl(
     const args = buildCliArgs(family, params, project, {
       reportPath,
       batchPath,
+      writeAuthorized: true, // Reached only after requireConfirmation succeeds.
       expectedPlanDigest: verifyPlan?.digest,
       invocationIdentity,
       unitBinding,
