@@ -3,6 +3,13 @@
 Changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics.
 This fork is **not** a byte-identical upstream release.
 
+## Unreleased (2026-11-08 — code-quality revisions)
+
+- Enforce frame-time budgets consistently; forward confirmed Pi destructive flags; retain watch errors across stream chunks and observation-window completion.
+- Share an asynchronous process lifecycle across direct CLI and supervised execution, including bounded descendant cleanup. Stop Verify after cancellation and preserve cancellation evidence.
+- Share Pi/MCP argv encoding and split verification snapshots, stage execution and report publication into separate modules included in package/service fingerprints.
+- Validation: 83 Node tests and both real-Godot suites passed on macOS; isolated GreyRanger fast passed 123 tests / 4,943 assertions, and a short scenario passed. Oracle consumer migration, native Windows/Linux and real Pi UI acceptance remain open. See [validation record](docs/code-quality-validation-2026-11-08.md).
+
 ## 1.6.8 (2026-11-07 — same-process A/B capture)
 
 - Add opt-in Scenario `capture_ab` steps through the existing CLI, MCP and Pi paths. Temporarily change supported visual node/camera properties in an isolated fixture process, capture A/B/restored A, restore property and processing state, and generate side-by-side images and heatmaps using the existing pixel comparator.
