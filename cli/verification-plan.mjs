@@ -1,3 +1,4 @@
+import { validateBudgets } from './performance-budgets.mjs';
 import { createHash } from 'node:crypto';
 import {
   closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync,
@@ -30,10 +31,7 @@ const DEFAULT_PROFILE = Object.freeze({
 });
 const TARGET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const VERIFICATION_PROFILE_FIELDS = new Set(['description', 'doctor', 'check', 'unit', 'scenarios', 'visuals', 'benchmarks', 'exports']);
-const BUDGET_KEYS = new Set([
-  'averageFpsGte', 'worstProcessMsLte', 'averageProcessMsLte', 'averagePhysicsMsLte',
-  'nodesLte', 'objectsLte', 'active2dObjectsLte', 'staticMemoryMbLte', 'drawCallsLte',
-]);
+
 
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -445,20 +443,6 @@ function runtimeProfile(project, config, profileName, targetUserArgs = [], overr
   };
 }
 
-function validateBudgets(value, label, strict = true) {
-  const budgets = value ?? {};
-  if (!isRecord(budgets)) throw new Error(`${label} must be an object`);
-  const result = {};
-  for (const [key, limit] of Object.entries(budgets)) {
-    if (!BUDGET_KEYS.has(key)) {
-      if (strict) throw new Error(`${label} contains unknown budget: ${key}`);
-      continue;
-    }
-    if (typeof limit !== 'number' || !Number.isFinite(limit)) throw new Error(`${label}.${key} must be a finite number`);
-    result[key] = limit;
-  }
-  return result;
-}
 
 function exportPlanning(project, config, targets, observation = null) {
   if (targets.length === 0) return { stages: [], confirmationEffects: [], generatedEffects: [], fingerprints: [] };

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { performanceBudgetResults } from './performance-budgets.mjs';
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -4355,30 +4356,6 @@ function boundedOutputTail(output, maximumLines = 24, maximumLineCharacters = 10
     .map((line) => boundedReportText(line, maximumLineCharacters) ?? '').join('\n');
 }
 
-function performanceBudgetResults(performance, budgets = {}) {
-  const definitions = [
-    ['averageFpsGte', 'average_fps', 'average_fps', '>=', 1],
-    ['worstFrameMsLte', 'worst_frame_ms', 'worst_frame_ms', '<=', 1],
-    ['averageFrameMsLte', 'average_frame_ms', 'average_frame_ms', '<=', 1],
-    ['worstProcessMsLte', 'worst_process_ms', 'worst_process_ms', '<=', 1],
-    ['averageProcessMsLte', 'average_process_ms', 'average_process_ms', '<=', 1],
-    ['averagePhysicsMsLte', 'average_physics_ms', 'average_physics_ms', '<=', 1],
-    ['nodesLte', 'nodes', 'nodes', '<=', 1],
-    ['objectsLte', 'objects', 'objects', '<=', 1],
-    ['active2dObjectsLte', 'active_2d_objects', 'active_2d_objects', '<=', 1],
-    ['staticMemoryMbLte', 'static_memory_bytes', 'static_memory_mb', '<=', 1024 * 1024],
-    ['drawCallsLte', 'draw_calls', 'draw_calls', '<=', 1],
-  ];
-  const results = [];
-  for (const [budgetName, sourceMetric, displayMetric, operator, divisor] of definitions) {
-    if (budgets[budgetName] === undefined) continue;
-    const actual = Number(performance?.[sourceMetric] ?? Number.NaN) / divisor;
-    const limit = Number(budgets[budgetName]);
-    const passed = Number.isFinite(actual) && (operator === '>=' ? actual >= limit : actual <= limit);
-    results.push({ budget: budgetName, metric: displayMetric, operator, actual, limit, passed });
-  }
-  return results;
-}
 
 function boundedVerificationReportJson(report, maximumBytes = 7 * 1024 * 1024) {
   const serialize = () => `${JSON.stringify(report, null, 2)}\n`;

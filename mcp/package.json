@@ -5,7 +5,7 @@
   "description": "MCP server exposing GodotFlightDeck gdeck_* tool families to ZCode and other MCP clients",
   "type": "module",
   "scripts": {
-    "test": "node --test contract.test.mjs result.test.mjs supervisor.test.mjs session.test.mjs diagnostics.test.mjs plan-diagnostics.test.mjs capture.test.mjs capture-ab.test.mjs",
+    "test": "node --test contract.test.mjs result.test.mjs supervisor.test.mjs session.test.mjs diagnostics.test.mjs plan-diagnostics.test.mjs capture.test.mjs capture-ab.test.mjs performance-budgets.test.mjs",
     "test:godot": "node --test --test-concurrency=1 smoke.test.mjs capture-ab-godot.test.mjs"
   },
   "bin": {
