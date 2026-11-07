@@ -86,6 +86,7 @@ Extension 只能操作包含 Pi 当前工作目录的可信 Godot 项目。确�
 ## MCP 集成
 
 Codex、ZCode 等 MCP 客户端可以通过 `mcp/server.mjs` 使用六组 `gdeck_*` 工具。
+日常开发和回归默认使用 CLI；MCP 是可选入口，验证 MCP 集成时再核对实际客户端连接。
 依赖安装、连接重启和回归测试命令见 [MCP server 文档](mcp/README.md)。
 
 ## 命令
@@ -193,7 +194,7 @@ gdeck scenario full-loop /path/to/project --profile smoke
 
 ### 同次运行 A/B 截图
 
-在场景已就绪的 Scenario 中加入 `capture_ab` 步骤，通过原有 `gdeck_validate(action="scenario", name="…", project="…")` 调用：
+在场景已就绪的 Scenario 中加入 `capture_ab` 步骤，通过 `gdeck scenario <name> <project>` 或 `gdeck_validate(action="scenario", name="…", project="…")` 调用：
 
 ```json
 {

@@ -10,8 +10,10 @@ Install the locked dependencies from the repository root:
 npm ci --ignore-scripts --prefix mcp
 ```
 
-Restart the client's MCP connection after changing the server or its tool schemas.
-The CLI is loaded by a fresh child process for each call.
+Reconnect the client's MCP connection after changing the server, its loaded
+dependencies, or its tool schemas. The CLI is loaded by a fresh child process for
+each call, so CLI-only updates with an unchanged MCP contract do not require a reconnect.
+Routine development and regression checks can use the CLI directly.
 
 ## Results and logs (MCP schema 2)
 
@@ -60,10 +62,12 @@ deadline greater than execution plus cleanup (e.g. timeout + 30 seconds).
 `gdeck_project(action="detect")` and executed action results include `service`:
 package version, implementation build fingerprint, MCP schema version, PID and
 process start time. The MCP initialize version also includes the build prefix.
-Reconnect after an update and compare the identity; an old server keeps old code.
+When verifying an MCP update, reconnect and compare this identity through the
+actual client connection; an old server retains its loaded code and startup identity.
 If detection has no service identity or validation still returns raw text without
 `structuredContent`, the connection has not demonstrated schema 2 support. Reconnect
 and check detection again; a passing CLI run alone does not verify the MCP update.
+An old MCP connection does not block independent CLI work.
 
 To test this source checkout through a fresh structured MCP session, without
 changing the installed server, save a normal MCP request as JSON and run:
