@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCliArgs, confirmationLifecycle } from '../extensions/runtime.mjs';
+import { buildCliArgs } from '../extensions/runtime.mjs';
 import { parseCliArguments } from '../registry/commands.mjs';
 const project = '/tmp/gdeck pi test';
 const parse = (params, writeAuthorized = false) => parseCliArguments(buildCliArgs('editor', params, project, { batchPath: '/tmp/batch.json', writeAuthorized }));
@@ -12,17 +12,6 @@ test('Pi confirmed writes carry apply; preflight and preview never commit', () =
     assert.equal(parse(params, true).options.apply, true, params.action);
   }
   for (const commit of [undefined, false]) assert.equal(parse({ action: 'batch', commit, operations }, true).options['dry-run'], true);
-});
-
-test('Pi confirmation denial, timeout and no UI cannot authorize execution', async () => {
-  for (const mode of ['approve', 'deny', 'timeout', 'no-ui']) {
-    let launched = 0;
-    let clock = 0;
-    const decision = await confirmationLifecycle({ hasUI: mode !== 'no-ui', leaseEligible: false, leaseAvailable: false, timeoutMilliseconds: 100, approvalLeaseSeconds: 0, now: () => clock,
-      confirm: async () => { if (mode === 'timeout') clock = 200; return mode === 'approve'; } });
-    if (decision.outcome === 'approved') { assert.equal(parse({ action: 'delete', path: 'Temporary' }, true).options.apply, true); launched++; }
-    assert.equal(launched, mode === 'approve' ? 1 : 0);
-  }
 });
 
 import { PI_FAMILIES } from '../registry/commands.mjs';
@@ -71,19 +60,26 @@ test('actual Pi tool callback gates execution on host confirmation', { skip: !no
   try {
     writeFileSync(join(root,'project.godot'),'config_version=5\n');
     const {default:register}=await import('../extensions/godot-flight-deck.ts');
-    for (const mode of ['approve','deny','timeout','no-ui']) {
+    for (const mode of ['approve','deny','timeout','no-ui','cancel']) {
       const tools=new Map(), calls=[];
+      const controller=new AbortController();
       register({registerTool:tool=>tools.set(tool.name,tool),registerCommand(){},on(){},
-        async exec(command,args){calls.push(JSON.parse(readFileSync(args[2],'utf8')));return {code:0,stdout:'done',stderr:''};}});
+        async exec(command,args,options){
+          calls.push(JSON.parse(readFileSync(args[2],'utf8')));
+          assert.equal(options.signal,controller.signal);
+          if(mode==='cancel') {controller.abort();throw new DOMException('cancelled','AbortError');}
+          return {code:0,stdout:'done',stderr:''};
+        }});
       const ctx={cwd:root,isProjectTrusted:()=>true,hasUI:mode!=='no-ui',ui:{confirm:async()=>{
         if(mode==='timeout') { const now=realNow(); Date.now=()=>now+200000; }
-        return mode==='approve';
+        return mode==='approve'||mode==='cancel';
       }}};
-      const result=await tools.get('gdeck_editor').execute('test',{action:'batch',commit:true,operations:[{action:'set',path:'.',property:'visible',value:false}]},undefined,undefined,ctx).catch(error=>({error}));
+      const result=await tools.get('gdeck_editor').execute('test',{action:'batch',commit:true,operations:[{action:'set',path:'.',property:'visible',value:false}]},controller.signal,undefined,ctx).catch(error=>({error}));
       Date.now=realNow;
-      assert.equal(calls.length,mode==='approve'?1:0,mode);
+      assert.equal(calls.length,['approve','cancel'].includes(mode)?1:0,mode);
       if(calls.length) assert.equal(parseCliArguments(calls[0].args.slice(1)).options.apply,true);
       else assert.match(result.error?.message ?? '', /denied|timed out|no Pi system confirmation/,mode);
+      if(mode==='cancel') assert.match(result.error?.message ?? '',/cancelled/);
     }
   } finally {Date.now=realNow;hooks.deregister();rmSync(root,{recursive:true,force:true});}
 });

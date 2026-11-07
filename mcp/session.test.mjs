@@ -9,6 +9,25 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+test('MCP watch completes a clean observation window without an outer timeout', { skip: process.platform === 'win32' }, async () => {
+  const project = realpathSync(mkdtempSync(join(tmpdir(), 'gdeck-watch-session-')));
+  const client = new Client({ name: 'watch-test', version: '1' });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('./server.mjs', import.meta.url))], stderr: 'pipe' });
+  transport.stderr?.resume();
+  try {
+    writeFileSync(join(project, 'project.godot'), 'config_version=5\n');
+    const engine = join(project, 'engine.mjs');
+    writeFileSync(engine, `#!${process.execPath}\nsetInterval(()=>{},1000);\n`, { mode: 0o700 });
+    mkdirSync(join(project, '.gdeck'));
+    writeFileSync(join(project, '.gdeck/config.json'), JSON.stringify({ godotPath: engine }));
+    await client.connect(transport);
+    const result = await client.callTool({ name: 'gdeck_run', arguments: { action: 'watch', project, timeout: 2 } });
+    assert.equal(result.structuredContent.process.exitCode, 0);
+    assert.equal(result.structuredContent.process.timedOut, false);
+    assert.notEqual(result.isError, true);
+  } finally { await client.close(); rmSync(project, { recursive: true, force: true }); }
+});
+
 test('invalid calls stay bounded before any project/process lookup', async () => {
   const client = new Client({ name: 'invalid-call-test', version: '1' });
   const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('./server.mjs', import.meta.url))], stderr: 'pipe' });
