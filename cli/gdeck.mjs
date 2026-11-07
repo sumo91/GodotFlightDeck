@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { performanceBudgetResults } from './performance-budgets.mjs';
 
+import { watchOutput } from './watch-output.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
@@ -2319,21 +2320,13 @@ function runProjectWatched(godot, project, options, passthrough) {
       child.kill();
     }, timeoutMs);
     const errorPattern = /SCRIPT ERROR|Parse Error|ERROR:|FATAL:/;
-    const forward = (chunk, streamName) => {
-      const text = chunk.toString();
-      for (const line of text.split(/\r?\n/)) {
-        if (!line) continue;
-        if (errorPattern.test(line)) {
-          console.log(color.red(`[gdeck:${streamName}] ${line}`));
-        } else if (line.startsWith('GDECK_')) {
-          console.log(color.muted(`[gdeck:${streamName}] ${line}`));
-        } else {
-          console.log(`[gdeck:${streamName}] ${line}`);
-        }
-      }
-    };
-    child.stdout.on('data', (chunk) => forward(chunk, 'out'));
-    child.stderr.on('data', (chunk) => forward(chunk, 'err'));
+    const output = watchOutput((streamName, line) => {
+      if (!line) return;
+      const formatted = `[gdeck:${streamName}] ${line}`;
+      console.log(errorPattern.test(line) ? color.red(formatted) : line.startsWith('GDECK_') ? color.muted(formatted) : formatted);
+    });
+    child.stdout.on('data', chunk => output.write('out', chunk));
+    child.stderr.on('data', chunk => output.write('err', chunk));
     let errored = false;
     child.on('error', (error) => {
       errored = true;
@@ -2346,7 +2339,7 @@ function runProjectWatched(godot, project, options, passthrough) {
       console.log(color.muted(`\n[gdeck] game exited (code ${code ?? '?'}${signal ? `, signal ${signal}` : ''})`));
       // A watch window that ended by our own timeout is a successful observation,
       // not a game failure; only premature exit or error output count as failures.
-      const failed = !timedOut && (errored || code !== 0 || signal != null);
+      const failed = output.finish() || errored || (!timedOut && (code !== 0 || signal != null));
       resolvePromise(failed ? 1 : 0);
     });
   });
