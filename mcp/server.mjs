@@ -44,7 +44,7 @@ export const SERVICE_INFO = Object.freeze({
     "mcp/server.mjs", "mcp/result.mjs", "mcp/supervisor.mjs", "cli/gdeck.mjs", "registry/commands.mjs",
     "godot/addons/flight_deck/scenario_runner.gd",
     "godot/addons/flight_deck/runtime_probe.gd", "cli/process-runner.mjs", "cli/verification-plan.mjs",
-    "cli/watch-output.mjs", "cli/performance-budgets.mjs", "cli/plan-diagnostics.mjs", "cli/diagnostics.mjs", "cli/runtime-clock.mjs",
+    "cli/process-lifecycle.mjs", "cli/watch-output.mjs", "cli/performance-budgets.mjs", "cli/plan-diagnostics.mjs", "cli/diagnostics.mjs", "cli/runtime-clock.mjs",
     "cli/result-envelope.mjs", "cli/evidence-journal.mjs", "cli/capture-ab.mjs",
     "godot/addons/flight_deck/capture_ab.gd", "godot/addons/flight_deck/visual_diff.gd",
   ].map(path => readFileSync(join(TOOL_ROOT, path))))).digest("hex"),
@@ -294,7 +294,7 @@ async function handleFamilyCall(familyName, params, signal, onPlan) {
       args.splice(index, 0, `--gdeck-internal-verify-plan-digest=${plan.digest}`, `--gdeck-internal-invocation-identity=${invocationIdentity}`);
       await onPlan?.(verificationPlanSummary(plan));
     }
-    return formatResult(actionName, project, await executeCli(args, timeoutSeconds, signal, project),
+    return formatResult(actionName, project, await executeCli(args, timeoutSeconds + (familyName === "run" && actionName === "watch" ? 5 : 0), signal, project),
       { family: familyName, reportPath, verbosity: params.verbosity, service: SERVICE_INFO });
   } catch (error) {
     return {

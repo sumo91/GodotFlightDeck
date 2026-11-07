@@ -85,7 +85,7 @@ test('MCP calls reach Godot with correct types, preview, commit, undo and explic
     assert.equal(failedStage.diagnostics.assertions.passed, false);
     const logPath = failedStage.diagnostics.logs.streams.stdout.path;
     assert.equal(failedStage.process.childProcesses.find(item => item.phase === 'unit').timings.scope, 'direct_child');
-    assert.equal(failedStage.process.timings.phaseBreakdownAvailable, false);
+    assert.equal(failedStage.process.timings.phaseBreakdownAvailable, true);
     assert.ok(readFileSync(logPath).length > 0);
     if (process.platform !== 'win32') assert.equal(statSync(logPath).mode & 0o777, 0o600);
     rmSync(failingTest);

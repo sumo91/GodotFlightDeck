@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { performanceBudgetResults } from './performance-budgets.mjs';
 
+import { executeProcess } from './process-lifecycle.mjs';
 import { watchOutput } from './watch-output.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -331,146 +332,29 @@ function cursorCompatEnabled() {
   return true;
 }
 
-function runSyncDirect(executable, args, options = {}) {
+async function runProcess(executable, args, options = {}) {
   const requestedTimeoutMs = Number(options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000);
   if (!Number.isFinite(requestedTimeoutMs) || requestedTimeoutMs <= 0) throw new Error('Process timeout must be a positive finite number');
   const deadlineNs = processDeadlineNs(requestedTimeoutMs);
-  const timeoutMs = remainingDeadlineMilliseconds(deadlineNs);
   const phase = String(options.phase ?? 'process').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'process';
-  if (timeoutMs === 0) {
-    const output = `Flight Deck: ${phase} deadline expired before process start\n`;
-    if (!options.quiet) process.stdout.write(output);
-    publishInternalStageOutcome('timeout', 'process_result', `${phase} deadline expired before process start`, { phase, reason: `${phase}_timeout`, started: false });
-    return { status: 124, stdout: '', stderr: output, output, timedOut: true, phase, reason: `${phase}_timeout` };
-  }
-  const maximumOutputBytes = Math.max(16 * 1024, Math.min(64 * 1024 * 1024,
-    Number(options.maxOutputBytes ?? options.maxBuffer ?? 32 * 1024 * 1024)));
-  const env = options.inheritEnv === false ? { ...(options.env ?? {}) } : { ...process.env, ...(options.env ?? {}) };
-  const processStarted = process.hrtime.bigint();
-  const result = spawnSync(executable, args, {
-    cwd: options.cwd || undefined,
-    env,
-    encoding: 'utf8',
-    timeout: timeoutMs,
-    maxBuffer: maximumOutputBytes + PROCESS_OUTPUT_OVERHEAD_BYTES,
-    killSignal: 'SIGTERM',
-    windowsHide: true,
-    shell: false,
-  });
-  const timings = { clock: 'monotonic', scope: 'direct_child', phaseBreakdownAvailable: false,
-    totalMs: Number(process.hrtime.bigint() - processStarted) / 1_000_000 };
-  const timedOut = result.error?.code === 'ETIMEDOUT';
-  const spawnFailed = Boolean(result.error) && !timedOut;
-  const status = timedOut ? 124 : spawnFailed ? 127 : (result.status ?? 1);
-  const stdout = String(result.stdout ?? '');
-  const stderr = timedOut
-    ? `${String(result.stderr ?? '')}Flight Deck: ${phase} timed out\n`
-    : spawnFailed
-      ? `${String(result.stderr ?? '')}Flight Deck: could not start process: ${result.error.message}\n`
-      : String(result.stderr ?? '');
-  const output = `${stdout}${stderr}`;
-  if (!options.quiet && output) process.stdout.write(output);
-  const lifecycleEvidence = { phase, reason: timedOut ? `${phase}_timeout` : spawnFailed ? 'process_spawn' : null, timedOut, cleanupTimedOut: false, outputTruncated: false };
-  recordInternalProcessTiming(phase, status, timings);
-  if (status === 127) publishInternalStageOutcome('process_spawn', 'process_result', `Configured ${phase} process could not be started`, lifecycleEvidence);
-  else if (status === 124) publishInternalStageOutcome('timeout', 'process_result', `${phase} timed out`, lifecycleEvidence);
-  return {
-    ...result,
-    status,
-    stdout,
-    stderr,
-    output,
-    timedOut,
-    cleanupTimedOut: false,
-    cancelled: false,
-    phase,
-    reason: lifecycleEvidence.reason,
-    timings,
-  };
-}
-
-function runSync(executable, args, options = {}) {
-  if (cursorCompatEnabled()) return runSyncDirect(executable, args, options);
-  const requestedTimeoutMs = Number(options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000);
-  if (!Number.isFinite(requestedTimeoutMs) || requestedTimeoutMs <= 0) throw new Error('Process timeout must be a positive finite number');
-  const cleanupTimeoutMs = Number(options.cleanupTimeoutMs ?? PROCESS_CLEANUP_TIMEOUT_MS);
-  if (!Number.isFinite(cleanupTimeoutMs) || cleanupTimeoutMs < 500 || cleanupTimeoutMs > 10_000) {
-    throw new Error('Process cleanup timeout must be between 500 and 10000 milliseconds');
-  }
-  const deadlineNs = processDeadlineNs(requestedTimeoutMs);
-  const timeoutMs = remainingDeadlineMilliseconds(deadlineNs);
-  const phase = String(options.phase ?? 'process').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'process';
-  if (timeoutMs === 0) {
-    const output = `Flight Deck: ${phase} deadline expired before process start\n`;
-    if (!options.quiet) process.stdout.write(output);
-    publishInternalStageOutcome('timeout', 'process_result', `${phase} deadline expired before process start`, { phase, reason: `${phase}_timeout`, started: false });
-    return { status: 124, stdout: '', stderr: output, output, timedOut: true, phase, reason: `${phase}_timeout` };
-  }
-  const maximumOutputBytes = Math.max(16 * 1024, Math.min(64 * 1024 * 1024,
-    Number(options.maxOutputBytes ?? options.maxBuffer ?? 32 * 1024 * 1024)));
-  const nonce = randomBytes(32).toString('hex');
-  const specification = JSON.stringify({
-    executable,
-    args,
-    cwd: options.cwd ?? '',
+  const result = await executeProcess({
+    executable, args, cwd: options.cwd,
     env: options.inheritEnv === false ? { ...(options.env ?? {}) } : { ...process.env, ...(options.env ?? {}) },
-    timeoutMs,
-    deadlineNs: String(deadlineNs),
-    cleanupTimeoutMs,
-    maxOutputBytes: maximumOutputBytes,
-    phase,
-    nonce,
-    propagateLifecycleRegistry: options.propagateLifecycleRegistry === true,
-  });
-  const lifecycleDescriptor = privateLifecycleRegistry();
-  const supervisorStdio = ['pipe', 'pipe', 'pipe', 'pipe'];
-  if (lifecycleDescriptor !== null) supervisorStdio.push(lifecycleDescriptor);
-  const result = spawnSync(process.execPath, [PROCESS_RUNNER, '--spec-stdin'], {
-    encoding: 'utf8',
-    input: specification,
-    stdio: supervisorStdio,
-    maxBuffer: maximumOutputBytes + PROCESS_OUTPUT_OVERHEAD_BYTES,
-    timeout: timeoutMs + cleanupTimeoutMs + PROCESS_WATCHDOG_GRACE_MS,
-    killSignal: 'SIGTERM',
-  });
-  let supervisor = null;
-  try {
-    const candidate = JSON.parse(String(result.output?.[3] ?? '').trim());
-    if (candidate?.schemaVersion === 1 && candidate.nonce === nonce && candidate.phase === phase
-      && Number.isInteger(candidate.status)) supervisor = candidate;
-  } catch { /* missing metadata is handled as a supervisor failure below */ }
-  const watchdogExpired = result.error?.code === 'ETIMEDOUT';
-  const status = watchdogExpired ? 125 : supervisor?.status ?? result.status ?? 1;
-  const stdout = String(result.stdout ?? '');
-  const stderr = String(result.stderr ?? '');
-  const output = `${stdout}${stderr}`;
+    timeoutMs: requestedTimeoutMs, deadlineNs: String(deadlineNs),
+    cleanupTimeoutMs: options.cleanupTimeoutMs ?? PROCESS_CLEANUP_TIMEOUT_MS,
+    maxOutputBytes: options.maxOutputBytes ?? options.maxBuffer ?? 32 * 1024 * 1024,
+    phase, propagateLifecycleRegistry: options.propagateLifecycleRegistry === true,
+    lifecycleProjectRoots: options.cwd ? [options.cwd] : [],
+    shell: options.shell === true,
+  }, { handleSignals: true, onOutput: options.onOutput });
+  const output = `${result.stdout}${result.stderr}`;
   if (!options.quiet && output) process.stdout.write(output);
-  const lifecycleEvidence = {
-    phase,
-    reason: supervisor?.reason ?? (watchdogExpired ? 'supervisor_watchdog_timeout' : null),
-    timedOut: status === 124,
-    cleanupTimedOut: status === 125 || supervisor?.cleanupTimedOut === true,
-    outputTruncated: supervisor?.stdoutTruncated === true || supervisor?.stderrTruncated === true,
-  };
-  recordInternalProcessTiming(phase, status, supervisor?.timings);
-  if (status === 127) publishInternalStageOutcome('process_spawn', 'process_result', `Configured ${phase} process could not be started`, lifecycleEvidence);
-  else if (status === 124) publishInternalStageOutcome('timeout', 'process_result', `${phase} timed out`, lifecycleEvidence);
-  else if (status === 125) publishInternalStageOutcome('cleanup_timeout', 'process_result', `${phase} supervisor exceeded its cleanup deadline`, lifecycleEvidence);
-  return {
-    ...result,
-    status,
-    stdout,
-    stderr,
-    output,
-    timedOut: status === 124,
-    cleanupTimedOut: status === 125 || supervisor?.cleanupTimedOut === true,
-    cancelled: supervisor?.cancelled === true,
-    outputTruncated: supervisor?.stdoutTruncated === true || supervisor?.stderrTruncated === true,
-    phase,
-    reason: supervisor?.reason ?? (watchdogExpired ? 'supervisor_watchdog_timeout' : undefined),
-    supervisor,
-    timings: boundedProcessTimings(supervisor?.timings),
-  };
+  const outputTruncated = result.stdoutTruncated === true || result.stderrTruncated === true;
+  const timings = { ...result.timings, scope: 'direct_child', phaseBreakdownAvailable: true };
+  recordInternalProcessTiming(phase, result.status, timings);
+  const classification = result.cancelled ? 'cancelled' : ({ 127: 'process_spawn', 124: 'timeout', 125: 'cleanup_timeout' })[result.status];
+  if (classification) publishInternalStageOutcome(classification, 'process_result', `${phase}: ${classification}`, { phase, reason: result.reason, timedOut: result.timedOut, cleanupTimedOut: result.cleanupTimedOut, outputTruncated });
+  return { ...result, output, outputTruncated, timings, supervisor: result };
 }
 
 const LIFECYCLE_TEMPORARY_PREFIXES = [
@@ -1067,8 +951,8 @@ function initProject(projectCandidate) {
   }
 }
 
-function godotVersion(godot, options = {}) {
-  const result = runSync(godot, ['--version'], {
+async function godotVersion(godot, options = {}) {
+  const result = await runProcess(godot, ['--version'], {
     quiet: true, timeoutMs: timeoutMilliseconds(options), maxOutputBytes: 16 * 1024, phase: 'godot_version',
   });
   if ([124, 125, 127].includes(result.status)) {
@@ -1178,7 +1062,7 @@ async function templatesCommand(positional, options) {
   const project = projectCandidate ? resolveProject(projectCandidate) : (isProjectDirectory(process.cwd()) ? resolveProject() : null);
   const config = project ? loadConfig(project) : defaultConfig();
   const godot = findGodot(config, options.godot);
-  const versionString = godotVersion(godot, options);
+  const versionString = await godotVersion(godot, options);
   const templateVersion = templateVersionFromGodot(versionString);
   const destination = join(exportTemplateRoot(), templateVersion);
   const installed = existsSync(destination) && readdirSync(destination).length > 0;
@@ -1212,7 +1096,7 @@ async function templatesCommand(positional, options) {
   }
   const extraction = join(tmpdir(), `gdeck-templates-${process.pid}-${Date.now()}`);
   mkdirSync(extraction, { recursive: true });
-  const unzip = runSync('unzip', ['-q', '-o', archive, '-d', extraction], { quiet: true, timeoutMs: timeoutMilliseconds(options) });
+  const unzip = await runProcess('unzip', ['-q', '-o', archive, '-d', extraction], { quiet: true, timeoutMs: timeoutMilliseconds(options) });
   if (unzip.status !== 0) {
     rmSync(extraction, { recursive: true, force: true });
     throw new Error(`Cannot extract export templates: ${unzip.output}`);
@@ -1286,7 +1170,7 @@ function exportSourceExclusions(project, exportsConfig) {
   ].filter((item) => pathIsInside(project, item.path));
 }
 
-function stageReleaseProject(project, sourceExclusions = [], importRuntime = null) {
+async function stageReleaseProject(project, sourceExclusions = [], importRuntime = null) {
   const stagingRoot = createLifecycleTemporaryDirectory('gdeck-release-project-');
   const ignored = new Set(['.git', '.godot', '.gdeck', 'tests', 'qa', 'docs']);
   try {
@@ -1310,7 +1194,7 @@ function stageReleaseProject(project, sourceExclusions = [], importRuntime = nul
     const sourceFingerprint = sealableProjectFingerprint(stagingRoot);
     const importableAssets = verificationImportableAssetCount(stagingRoot);
     if (importableAssets > 0) {
-      prepareProjectImportsForSealing(stagingRoot, importRuntime);
+      await prepareProjectImportsForSealing(stagingRoot, importRuntime);
       if (sealableProjectFingerprint(stagingRoot) !== sourceFingerprint) {
         throw new ResultClassificationError('plan_drift', 'Release source changed while Godot imports were being prepared; export was not started.');
       }
@@ -1350,7 +1234,7 @@ function validateZipEntryNames(names) {
   }
 }
 
-function nativeMacosSmoke(output, executableEntry, options) {
+async function nativeMacosSmoke(output, executableEntry, options) {
   const sandbox = createLifecycleTemporaryDirectory('gdeck-native-smoke-');
   const extraction = join(sandbox, 'archive');
   const isolatedHome = join(sandbox, 'home');
@@ -1359,18 +1243,18 @@ function nativeMacosSmoke(output, executableEntry, options) {
   const isolatedConfig = join(sandbox, 'config');
   try {
     for (const directory of [extraction, isolatedHome, isolatedTemp, isolatedData, isolatedConfig]) mkdirSync(directory, { recursive: true });
-    const metadata = runSync('unzip', ['-Z', '-l', output], { quiet: true, timeoutMs: 30_000 });
+    const metadata = await runProcess('unzip', ['-Z', '-l', output], { quiet: true, timeoutMs: 30_000 });
     if (metadata.status !== 0) return { passed: false, nativeRun: false, reason: 'cannot inspect macOS archive metadata' };
     if (metadata.stdout.split(/\r?\n/).some((line) => /^l[rwx-]{9}\s/.test(line))) {
       return { passed: false, nativeRun: false, reason: 'macOS archive contains symbolic links' };
     }
-    const unzip = runSync('unzip', ['-q', output, '-d', extraction], { quiet: true, timeoutMs: 30_000 });
+    const unzip = await runProcess('unzip', ['-q', output, '-d', extraction], { quiet: true, timeoutMs: 30_000 });
     if (unzip.status !== 0) return { passed: false, nativeRun: false, reason: 'cannot extract macOS archive for native smoke' };
     const executable = resolve(extraction, executableEntry);
     if (!pathIsInside(extraction, executable) || pathContainsSymlink(extraction, executable) || !existsSync(executable) || !statSync(executable).isFile()) {
       return { passed: false, nativeRun: false, reason: 'macOS app executable is unsafe or missing after extraction' };
     }
-    const result = runSync(executable, ['--headless', '--quit-after', '2'], {
+    const result = await runProcess(executable, ['--headless', '--quit-after', '2'], {
       cwd: dirname(executable),
       quiet: true,
       timeoutMs: options.timeoutMs,
@@ -1402,11 +1286,11 @@ function nativeMacosSmoke(output, executableEntry, options) {
   }
 }
 
-function smokeExport(target, output, nativeSmokeOptions = { enabled: false }) {
+async function smokeExport(target, output, nativeSmokeOptions = { enabled: false }) {
   const status = statSync(output);
   if (!status.isFile() || status.size <= 0) return { passed: false, reason: 'primary artifact is empty' };
   if (target === 'macos') {
-    const listing = runSync('unzip', ['-Z1', output], { quiet: true, timeoutMs: 30_000 });
+    const listing = await runProcess('unzip', ['-Z1', output], { quiet: true, timeoutMs: 30_000 });
     const names = listing.stdout.split(/\r?\n/).filter(Boolean);
     if (listing.status !== 0) return { passed: false, reason: 'cannot inspect macOS archive', nativeRun: false };
     try { validateZipEntryNames(names); } catch (error) { return { passed: false, reason: error.message, nativeRun: false }; }
@@ -1416,7 +1300,7 @@ function smokeExport(target, output, nativeSmokeOptions = { enabled: false }) {
       if (process.platform !== 'darwin') {
         return { passed: false, reason: 'native macOS smoke was requested on a non-macOS host', nativeRun: false };
       }
-      return nativeMacosSmoke(output, executableEntry, nativeSmokeOptions);
+      return await nativeMacosSmoke(output, executableEntry, nativeSmokeOptions);
     }
     return {
       passed: true,
@@ -1491,17 +1375,17 @@ function releaseManifestPath(project) {
   return path;
 }
 
-function releaseGitSha(project) {
-  const result = runSync('git', ['-C', project, 'rev-parse', 'HEAD'], { quiet: true, timeoutMs: 10_000 });
+async function releaseGitSha(project) {
+  const result = await runProcess('git', ['-C', project, 'rev-parse', 'HEAD'], { quiet: true, timeoutMs: 10_000 });
   return result.status === 0 ? result.stdout.trim() : 'unknown';
 }
 
-function writeReleaseManifest(project, values) {
+async function writeReleaseManifest(project, values) {
   const manifest = {
     schemaVersion: 1,
     flightDeckVersion: TOOL_VERSION,
     createdAt: new Date().toISOString(),
-    gitSha: values.gitSha ?? releaseGitSha(project),
+    gitSha: values.gitSha ?? await releaseGitSha(project),
     debug: Boolean(values.debug),
     publishRequested: Boolean(values.publishRequested),
     publishReady: false,
@@ -1515,7 +1399,7 @@ function writeReleaseManifest(project, values) {
   return manifest;
 }
 
-function exportProject(positional, options, internalStage = null) {
+async function exportProject(positional, options, internalStage = null) {
   const targetName = internalStage?.stage.target ?? positional[0] ?? 'all';
   const project = internalStage?.plan.project ?? resolveProject(positional[1] ?? process.cwd());
   const sourceProject = verificationExecutionProject(internalStage) ?? project;
@@ -1565,7 +1449,7 @@ function exportProject(positional, options, internalStage = null) {
   const groups = new Map();
   const exportStagingRoot = join(project, '.gdeck', 'export-staging');
   if (pathContainsSymlink(project, exportStagingRoot)) throw new Error(`Export staging path must not contain symbolic links: ${exportStagingRoot}`);
-  const sourceStage = stageReleaseProject(sourceProject, exportSourceExclusions(sourceProject, exportsConfig), {
+  const sourceStage = await stageReleaseProject(sourceProject, exportSourceExclusions(sourceProject, exportsConfig), {
     godot,
     timeoutMs: timeoutMilliseconds(options),
   });
@@ -1597,7 +1481,7 @@ function exportProject(positional, options, internalStage = null) {
       if (plan.target !== 'macos') rmSync(stagedOutput.replace(/\.(?:exe|x86_64)$/i, '.pck'), { force: true });
       console.log(`Exporting ${plan.target} → ${plan.finalOutput}`);
       const mode = options.debug ? '--export-debug' : '--export-release';
-      const result = runSync(godot, ['--headless', '--path', sourceStage, mode, plan.definition.preset, stagedOutput], {
+      const result = await runProcess(godot, ['--headless', '--path', sourceStage, mode, plan.definition.preset, stagedOutput], {
         cwd: sourceStage,
         timeoutMs: timeoutMilliseconds(options),
         phase: 'export',
@@ -1605,7 +1489,7 @@ function exportProject(positional, options, internalStage = null) {
       timedOut ||= result.timedOut;
       if ([124, 125, 127].includes(result.status)) lifecycleStatus = result.status;
       const smoke = result.status === 0 && !ERROR_PATTERN.test(result.output) && existsSync(stagedOutput)
-        ? smokeExport(plan.target, stagedOutput, nativeSmokeByTarget.get(plan.target))
+        ? await smokeExport(plan.target, stagedOutput, nativeSmokeByTarget.get(plan.target))
         : { passed: false, reason: result.timedOut ? 'export timed out' : 'Godot export failed' };
       if (!smoke.passed) {
         console.log(color.red(`Export failed: ${plan.target}`));
@@ -1640,7 +1524,7 @@ function exportProject(positional, options, internalStage = null) {
       else replaceDirectoryAtomically(group.stagedDirectory, finalDirectory);
     }
     for (const artifact of artifacts) console.log(color.green(`Export complete: ${artifact.target}`));
-    writeReleaseManifest(project, {
+    await writeReleaseManifest(project, {
       debug: options.debug,
       publishRequested: options.publish,
       artifacts,
@@ -1682,8 +1566,8 @@ function exportProject(positional, options, internalStage = null) {
   return lifecycleStatus || (timedOut ? 124 : failed || artifacts.length !== requested.length ? 1 : 0);
 }
 
-function gitRoot(project, options = {}) {
-  const result = runSync('git', ['-C', project, 'rev-parse', '--show-toplevel'], {
+async function gitRoot(project, options = {}) {
+  const result = await runProcess('git', ['-C', project, 'rev-parse', '--show-toplevel'], {
     quiet: true, timeoutMs: timeoutMilliseconds(options), phase: 'git_root',
   });
   return result.status === 0 ? result.stdout.trim() : '';
@@ -1921,7 +1805,7 @@ async function doctor(projectCandidate, options, internalStage = null) {
   if (godot) {
     try {
       godotVersionProbeRan = true;
-      checks.push({ id: 'godot-version', name: 'Godot version', status: 'ok', detail: godotVersion(godot, options) });
+      checks.push({ id: 'godot-version', name: 'Godot version', status: 'ok', detail: await godotVersion(godot, options) });
     } catch (error) {
       if ([124, 125, 127].includes(error.exitCode)) lifecycleStatus = error.exitCode;
       checks.push({ id: 'godot-version', name: 'Godot version', status: 'error', detail: error.message });
@@ -2095,7 +1979,7 @@ async function doctor(projectCandidate, options, internalStage = null) {
     status: templateError ? 'error' : templates.length > 0 ? 'ok' : 'warn',
     detail: templateError || (templates.length > 0 ? templates.join(', ') : 'No templates installed'),
   });
-  const root = gitRoot(project, options);
+  const root = await gitRoot(project, options);
   checks.push({
     id: 'git-repository',
     name: 'Git repository',
@@ -2165,7 +2049,7 @@ async function doctor(projectCandidate, options, internalStage = null) {
   return lifecycleStatus || (checks.some((check) => check.status === 'error') ? 1 : 0);
 }
 
-function checkScriptFile(project, godot, file, options) {
+async function checkScriptFile(project, godot, file, options) {
   const target = resolve(project, file);
   if (!pathIsInside(project, target)) throw new Error(`check --file must be inside the project: ${file}`);
   if (!existsSync(target) || !statSync(target).isFile()) throw new Error(`check --file does not exist: ${file}`);
@@ -2173,7 +2057,7 @@ function checkScriptFile(project, godot, file, options) {
   const runner = join(TOOL_ROOT, 'godot', 'check_script_runner.gd');
   if (!existsSync(runner)) throw new Error(`check script runner missing: ${runner}`);
   console.log(color.muted(`Checking ${target}`));
-  const result = runSync(godot, ['--headless', '--path', project, '-s', runner, '--', target], {
+  const result = await runProcess(godot, ['--headless', '--path', project, '-s', runner, '--', target], {
     cwd: project, timeoutMs: timeoutMilliseconds(options), phase: 'check-file',
   });
   const failed = result.status !== 0 || ERROR_PATTERN.test(result.output);
@@ -2194,14 +2078,14 @@ function checkScriptFile(project, godot, file, options) {
   return failed ? 1 : 0;
 }
 
-function checkProject(projectCandidate, options, internalStage = null) {
+async function checkProject(projectCandidate, options, internalStage = null) {
   const project = internalStage?.plan.project ?? resolveProject(projectCandidate);
   const executionProject = verificationExecutionProject(internalStage) ?? project;
   const config = internalStage ? { godotPath: internalStage.stage.runtime.godotPath } : loadConfig(project);
   const godot = findGodot(config, options.godot);
-  if (options.file) return checkScriptFile(executionProject, godot, options.file, options);
+  if (options.file) return await checkScriptFile(executionProject, godot, options.file, options);
   console.log(color.muted(`Checking ${project}`));
-  const result = runSync(godot, ['--headless', '--path', executionProject, '--editor', '--quit'], {
+  const result = await runProcess(godot, ['--headless', '--path', executionProject, '--editor', '--quit'], {
     cwd: executionProject, timeoutMs: timeoutMilliseconds(options), phase: 'check',
   });
   const failed = result.status !== 0 || ERROR_PATTERN.test(result.output);
@@ -2280,7 +2164,7 @@ async function runProject(projectCandidate, options, passthrough) {
       ...passthrough,
     ];
     console.log(color.muted(`Observing ${project} for ${frames} frames (seed ${seedValue})`));
-    const result = runSync(godot, withRuntimeClockMetadata(['--path', project, '--', ...userArgs]), {
+    const result = await runProcess(godot, withRuntimeClockMetadata(['--path', project, '--', ...userArgs]), {
       cwd: project,
       timeoutMs: timeoutMilliseconds(options),
       phase: 'run-query',
@@ -2293,7 +2177,7 @@ async function runProject(projectCandidate, options, passthrough) {
     printQueryResults(report, options);
     return failed ? processStatusOr(result) : 0;
   }
-  const result = runSync(godot, ['--path', project, ...(passthrough.length ? ['--', ...passthrough] : [])], {
+  const result = await runProcess(godot, ['--path', project, ...(passthrough.length ? ['--', ...passthrough] : [])], {
     cwd: project,
     timeoutMs: timeoutMilliseconds(options),
     phase: 'run',
@@ -2301,48 +2185,24 @@ async function runProject(projectCandidate, options, passthrough) {
   return result.status;
 }
 
-function runProjectWatched(godot, project, options, passthrough) {
-  return new Promise((resolvePromise) => {
-    const godotArgs = ['--path', project];
-    if (options['main-scene']) {
-      if (!options['main-scene'].startsWith('res://')) {
-        throw new Error('--main-scene must be a res:// path');
-      }
-      godotArgs.push('--main-scene', options['main-scene']);
-    }
-    const args = [...godotArgs, ...(passthrough.length ? ['--', ...passthrough] : [])];
-    const child = spawn(godot, args, { cwd: project, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const timeoutMs = timeoutMilliseconds(options);
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      console.log(color.yellow(`\n[gdeck] watch timeout after ${timeoutMs}ms; terminating game`));
-      child.kill();
-    }, timeoutMs);
-    const errorPattern = /SCRIPT ERROR|Parse Error|ERROR:|FATAL:/;
-    const output = watchOutput((streamName, line) => {
-      if (!line) return;
-      const formatted = `[gdeck:${streamName}] ${line}`;
-      console.log(errorPattern.test(line) ? color.red(formatted) : line.startsWith('GDECK_') ? color.muted(formatted) : formatted);
-    });
-    child.stdout.on('data', chunk => output.write('out', chunk));
-    child.stderr.on('data', chunk => output.write('err', chunk));
-    let errored = false;
-    child.on('error', (error) => {
-      errored = true;
-      clearTimeout(timer);
-      console.error(color.red(`[gdeck] failed to start game: ${error.message}`));
-      resolvePromise(1);
-    });
-    child.on('close', (code, signal) => {
-      clearTimeout(timer);
-      console.log(color.muted(`\n[gdeck] game exited (code ${code ?? '?'}${signal ? `, signal ${signal}` : ''})`));
-      // A watch window that ended by our own timeout is a successful observation,
-      // not a game failure; only premature exit or error output count as failures.
-      const failed = output.finish() || errored || (!timedOut && (code !== 0 || signal != null));
-      resolvePromise(failed ? 1 : 0);
-    });
+async function runProjectWatched(godot, project, options, passthrough) {
+  const godotArgs = ['--path', project];
+  if (options['main-scene']) {
+    if (!options['main-scene'].startsWith('res://')) throw new Error('--main-scene must be a res:// path');
+    godotArgs.push('--main-scene', options['main-scene']);
+  }
+  const output = watchOutput((stream, line) => {
+    if (line) console.log(`[gdeck:${stream === 'stdout' ? 'out' : 'err'}] ${line}`);
   });
+  const result = await runProcess(godot, [...godotArgs, ...(passthrough.length ? ['--', ...passthrough] : [])], {
+    cwd: project, timeoutMs: timeoutMilliseconds(options), phase: 'watch', quiet: true,
+    onOutput: (stream, chunk) => output.write(stream, chunk),
+  });
+  const errors = output.finish();
+  // Window completion is expected; cleanup/cancellation failures remain failures.
+  if (result.cleanupTimedOut || result.cancelled || result.status === 127) return result.status;
+  if (errors) return 1;
+  return result.timedOut ? 0 : result.status;
 }
 
 function timestamp() {
@@ -2459,7 +2319,7 @@ const SCENE_RESOURCE_TYPES = new Map([
   ['PackedScene', ['.tscn', '.scn']],
 ]);
 
-function sceneSet(positional, options, internalStage = null) {
+async function sceneSet(positional, options, internalStage = null) {
   const project = internalStage?.plan.project ?? (positional[5] ? resolveProject(positional[5]) : resolveProject());
   const executionProject = verificationExecutionProject(internalStage) ?? project;
   const config = internalStage ? { godotPath: internalStage.stage.runtime.godotPath } : loadConfig(project);
@@ -2493,7 +2353,7 @@ function sceneSet(positional, options, internalStage = null) {
     console.log(color.muted(`Snapshot: ${snapshot}`));
   }
   const runner = join(TOOL_ROOT, 'godot', 'scene_edit_runner.gd');
-  const result = runSync(godot, ['--headless', '--path', executionProject, '-s', runner, '--', scenePath, nodePath, property, jsonValue, mode], {
+  const result = await runProcess(godot, ['--headless', '--path', executionProject, '-s', runner, '--', scenePath, nodePath, property, jsonValue, mode], {
     cwd: executionProject, timeoutMs: timeoutMilliseconds(options), phase: 'scene-set',
   });
   const failed = result.status !== 0 || ERROR_PATTERN.test(result.output);
@@ -2509,7 +2369,7 @@ function sceneSet(positional, options, internalStage = null) {
   if (mode === 'apply') {
     console.log(color.green(`Applied ${property}=${jsonValue} to ${scenePath}`));
     console.log(color.muted('  Note: ResourceSaver rewrites the whole scene (canonical Godot style); expected.'));
-    const doctorResult = sceneDoctor(['doctor', project], { ...options, json: false });
+    const doctorResult = await sceneDoctor(['doctor', project], { ...options, json: false });
     if (doctorResult !== 0) {
       console.error(color.yellow(`  scene doctor found broken scenes after edit; restore with: gdeck scene restore ${snapshot} --apply`));
     }
@@ -2544,7 +2404,7 @@ function sceneRestore(positional, options, internalStage = null) {
   return 0;
 }
 
-function sceneDoctor(positional, options, internalStage = null) {
+async function sceneDoctor(positional, options, internalStage = null) {
   const project = internalStage?.plan.project ?? (positional[1] ? resolveProject(positional[1]) : resolveProject());
   const executionProject = verificationExecutionProject(internalStage) ?? project;
   const config = internalStage ? { godotPath: internalStage.stage.runtime.godotPath } : loadConfig(project);
@@ -2560,7 +2420,7 @@ function sceneDoctor(positional, options, internalStage = null) {
     scanSceneFile(file, project, findings);
   }
   const staticDurationMs = Date.now() - started;
-  const report = runSync(godot, ['--headless', '--path', executionProject, '-s', join(TOOL_ROOT, 'godot', 'scene_scan_runner.gd'), '--', 'res://scenes'], {
+  const report = await runProcess(godot, ['--headless', '--path', executionProject, '-s', join(TOOL_ROOT, 'godot', 'scene_scan_runner.gd'), '--', 'res://scenes'], {
     cwd: executionProject, timeoutMs: timeoutMilliseconds(options), phase: 'scene-doctor',
   });
   const loadFindings = parseSceneScanOutput(report.output);
@@ -2806,9 +2666,9 @@ function ensureFixtureAdapterIsProfileDeclared(userArgs) {
   }
 }
 
-function runProfileGodot(godot, args, options, fixtureAdapter) {
+async function runProfileGodot(godot, args, options, fixtureAdapter) {
   args = withRuntimeClockMetadata(args);
-  if (!fixtureAdapter) return runSync(godot, args, options);
+  if (!fixtureAdapter) return await runProcess(godot, args, options);
   const isolationRoot = createLifecycleTemporaryDirectory('gdeck-fixture-run-');
   const capability = randomBytes(32).toString('hex');
   const directories = {
@@ -2823,7 +2683,7 @@ function runProfileGodot(godot, args, options, fixtureAdapter) {
   };
   for (const directory of new Set(Object.values(directories))) mkdirSync(directory, { recursive: true });
   try {
-    return runSync(godot, [...args, `--gdeck-fixture-capability=${capability}`], {
+    return await runProcess(godot, [...args, `--gdeck-fixture-capability=${capability}`], {
       ...options,
       env: { ...(options.env ?? {}), ...directories, GDECK_FIXTURE_CAPABILITY: capability },
     });
@@ -2832,7 +2692,7 @@ function runProfileGodot(godot, args, options, fixtureAdapter) {
   }
 }
 
-function captureProject(positional, options, internalStage = null) {
+async function captureProject(positional, options, internalStage = null) {
   const runtime = internalStage?.stage.runtime;
   const selected = internalStage ? { project: internalStage.plan.project, profile: internalStage.stage.target } : projectAndProfile(positional);
   const { project, profile: profileName } = selected;
@@ -2863,7 +2723,7 @@ function captureProject(positional, options, internalStage = null) {
       `--gdeck-after-frames=${frames}`,
       `--gdeck-seed=${seedValue}`,
     ];
-    const result = runProfileGodot(godot, ['--path', executionProject, '--fixed-fps', '60', '--', ...userArgs], {
+    const result = await runProfileGodot(godot, ['--path', executionProject, '--fixed-fps', '60', '--', ...userArgs], {
       cwd: executionProject, timeoutMs: timeoutMilliseconds(options), phase: 'capture',
     }, fixtureAdapter);
     const failed = result.status !== 0 || ERROR_PATTERN.test(result.output) || !existsSync(stagedImage) || !existsSync(stagedReport);
@@ -2901,7 +2761,7 @@ function scenarioFile(project, candidate) {
   throw new Error(`Scenario not found: ${candidate}`);
 }
 
-function runScenario(positional, options, internalStage = null) {
+async function runScenario(positional, options, internalStage = null) {
   if (positional.length === 0) throw new Error('Scenario name or JSON file is required.');
   const runtime = internalStage?.stage.runtime;
   const project = internalStage?.plan.project ?? resolveProject(positional[1] ?? process.cwd());
@@ -2983,7 +2843,7 @@ function runScenario(positional, options, internalStage = null) {
     `--gdeck-seed=${seedValue}`,
   ];
   if (capturesOutput) userArgs.push(`--gdeck-capture=${output}`);
-  const result = runProfileGodot(godot, ['--path', executionProject, '--fixed-fps', '60', '--', ...userArgs], {
+  const result = await runProfileGodot(godot, ['--path', executionProject, '--fixed-fps', '60', '--', ...userArgs], {
     cwd: executionProject,
     timeoutMs: timeoutMilliseconds(options),
     phase: 'scenario',
@@ -3045,7 +2905,7 @@ function runScenario(positional, options, internalStage = null) {
   }
 }
 
-function baselineProject(positional, options) {
+async function baselineProject(positional, options) {
   const { project, profile } = projectAndProfile(positional);
   const output = join(project, 'qa', 'baselines', `${profile}.png`);
   const metadataPath = join(project, 'qa', 'baselines', `${profile}.json`);
@@ -3054,7 +2914,7 @@ function baselineProject(positional, options) {
   const frames = Number(options.frames ?? profileConfig.frames ?? 30);
   const seedValue = Number(options.seed ?? profileConfig.seed ?? 42);
   mkdirSync(dirname(output), { recursive: true });
-  const status = captureProject(positional, { ...options, frames, seed: seedValue, output });
+  const status = await captureProject(positional, { ...options, frames, seed: seedValue, output });
   if (status === 0) {
     const metadata = {
       schemaVersion: 1,
@@ -3072,7 +2932,7 @@ function baselineProject(positional, options) {
   return status;
 }
 
-function visualTest(positional, options, internalStage = null) {
+async function visualTest(positional, options, internalStage = null) {
   const runtime = internalStage?.stage.runtime;
   const selected = internalStage ? { project: internalStage.plan.project, profile: internalStage.stage.target } : projectAndProfile(positional);
   const { project, profile } = selected;
@@ -3095,7 +2955,7 @@ function visualTest(positional, options, internalStage = null) {
     seed: runtime?.seed ?? options.seed ?? metadata.seed,
     output: actual,
   };
-  const captureStatus = captureProject(positional, captureOptions, internalStage);
+  const captureStatus = await captureProject(positional, captureOptions, internalStage);
   if (captureStatus !== 0) return captureStatus;
   const config = runtime ? { godotPath: runtime.godotPath } : loadConfig(project);
   const godot = findGodot(config, options.godot);
@@ -3111,7 +2971,7 @@ function visualTest(positional, options, internalStage = null) {
     `--threshold=${threshold}`,
     `--tolerance=${tolerance}`,
   ];
-  const result = runSync(godot, args, {
+  const result = await runProcess(godot, args, {
     cwd: executionProject, timeoutMs: timeoutMilliseconds(options), phase: 'visual_diff',
   });
   if (!existsSync(report)) {
@@ -3133,7 +2993,7 @@ function visualTest(positional, options, internalStage = null) {
   return passed ? 0 : processStatusOr(result);
 }
 
-function benchmarkProject(positional, options, internalStage = null) {
+async function benchmarkProject(positional, options, internalStage = null) {
   const runtime = internalStage?.stage.runtime;
   const selected = internalStage ? { project: internalStage.plan.project, profile: internalStage.stage.target } : projectAndProfile(positional);
   const { project, profile: profileName } = selected;
@@ -3160,7 +3020,7 @@ function benchmarkProject(positional, options, internalStage = null) {
     `--gdeck-after-frames=${warmupFrames + frames}`,
     `--gdeck-seed=${seedValue}`,
   ];
-  const result = runProfileGodot(godot, ['--path', executionProject, '--', ...userArgs], {
+  const result = await runProfileGodot(godot, ['--path', executionProject, '--', ...userArgs], {
     cwd: executionProject, timeoutMs: timeoutMilliseconds(options), phase: 'benchmark',
   }, fixtureAdapter);
   const failed = result.status !== 0 || ERROR_PATTERN.test(result.output) || !existsSync(report);
@@ -3252,7 +3112,7 @@ function readUnitReportStable(report, maximumBytes = 64 * 1024 * 1024) {
   }
 }
 
-function runUnitTests(projectCandidate, options, internalStage = null, directUnitBinding = null) {
+async function runUnitTests(projectCandidate, options, internalStage = null, directUnitBinding = null) {
   const project = internalStage?.plan.project ?? resolveProject(projectCandidate);
   const executionProject = verificationExecutionProject(internalStage) ?? project;
   const testsDirectory = join(executionProject, 'tests');
@@ -3298,7 +3158,7 @@ function runUnitTests(projectCandidate, options, internalStage = null, directUni
     `--report=${report}`,
     `--gdeck-unit-binding=${Buffer.from(JSON.stringify(expectedBinding)).toString('base64url')}`,
   ];
-  const result = runSync(godot, args, {
+  const result = await runProcess(godot, args, {
     cwd: executionProject, timeoutMs, phase: 'unit', quiet: true,
   });
   if (result.status !== 0 || ERROR_PATTERN.test(result.output)) {
@@ -3894,7 +3754,7 @@ function sealableProjectFingerprint(root) {
   return hash.digest('hex');
 }
 
-function prepareProjectImportsForSealing(root, runtime) {
+async function prepareProjectImportsForSealing(root, runtime) {
   if (!runtime?.godot || !Number.isFinite(runtime.timeoutMs) || runtime.timeoutMs <= 0) {
     throw new ResultClassificationError('configuration', 'Godot import preparation requires a bounded executable runtime');
   }
@@ -3910,7 +3770,7 @@ function prepareProjectImportsForSealing(root, runtime) {
       writeFileAtomic(projectFile, importProjectGodot);
     }
     // Single bounded attempt — never auto-retry or warm up for green.
-    result = runSync(runtime.godot, ['--headless', '--path', root, '--import'], {
+    result = await runProcess(runtime.godot, ['--headless', '--path', root, '--import'], {
       cwd: root,
       timeoutMs: runtime.timeoutMs,
       phase: 'import_preflight',
@@ -3981,13 +3841,13 @@ function removeVerificationSnapshot(snapshot) {
   removeLifecycleTemporaryDirectory(snapshot.root);
 }
 
-function createVerificationSnapshot(plan) {
+async function createVerificationSnapshot(plan) {
   const timings = { clock: 'monotonic', scope: 'verification_preparation', phases: {} };
   let activePhase = 'snapshot_copy';
-  const measure = (name, action) => {
+  const measure = async (name, action) => {
     activePhase = name;
     const started = process.hrtime.bigint();
-    try { return action(); }
+    try { return await action(); }
     finally { timings.phases[name] = (timings.phases[name] ?? 0) + Number(process.hrtime.bigint() - started) / 1_000_000; }
   };
   const root = createLifecycleTemporaryDirectory('gdeck-verification-snapshot-');
@@ -3996,7 +3856,7 @@ function createVerificationSnapshot(plan) {
     path: resolve(plan.project, item.path), subtree: item.subtree === true,
   }));
   try {
-    measure('snapshot_copy', () => cpSync(plan.project, executionProject, {
+    await measure('snapshot_copy', () => cpSync(plan.project, executionProject, {
       recursive: true,
       force: true,
       filter: (source) => {
@@ -4008,7 +3868,7 @@ function createVerificationSnapshot(plan) {
         return !sourceExclusions.some((item) => source === item.path || (item.subtree && pathIsInside(item.path, source)));
       },
     }));
-    measure('snapshot_validation', () => assertVerificationSnapshotInputs(plan, executionProject));
+    await measure('snapshot_validation', () => assertVerificationSnapshotInputs(plan, executionProject));
     mkdirSync(join(executionProject, '.godot'), { recursive: true });
     const importableAssets = verificationImportableAssetCount(executionProject);
     const runtimeNeedsClassCache = plan.stages.some((stage) => stage.disposition === 'run' && ['unit', 'scenario', 'visual', 'benchmark'].includes(stage.kind));
@@ -4017,14 +3877,14 @@ function createVerificationSnapshot(plan) {
     }
     if (plan.preparation.godotImportRequired) {
       const godot = findGodot({ godotPath: plan.preparation.godotPath });
-      timings.importProcess = measure('import', () => prepareProjectImportsForSealing(executionProject, { godot, timeoutMs: plan.timeoutMs }));
-      measure('snapshot_validation', () => assertVerificationSnapshotInputs(plan, executionProject));
+      timings.importProcess = await measure('import', async () => await prepareProjectImportsForSealing(executionProject, { godot, timeoutMs: plan.timeoutMs }));
+      await measure('snapshot_validation', () => assertVerificationSnapshotInputs(plan, executionProject));
     }
-    measure('snapshot_seal', () => setVerificationTreeReadOnly(executionProject));
+    await measure('snapshot_seal', () => setVerificationTreeReadOnly(executionProject));
     return { root, project: executionProject, timings };
   } catch (error) {
     error.resultPhase ??= activePhase;
-    measure('snapshot_cleanup', () => removeVerificationSnapshot({ root, project: executionProject }));
+    await measure('snapshot_cleanup', () => removeVerificationSnapshot({ root, project: executionProject }));
     error.resultTimings = timings;
     throw error;
   }
@@ -4062,7 +3922,7 @@ function boundedDoctorVerificationOutput(stdout) {
   }
 }
 
-function executeVerificationCommand(planned, plan, executionProject) {
+async function executeVerificationCommand(planned, plan, executionProject) {
   const started = process.hrtime.bigint();
   const argumentsList = [...planned.commandArgs, '--timeout', String(planned.timeoutMs / 1000)];
   const outcomeNonce = randomBytes(32).toString('hex');
@@ -4085,7 +3945,7 @@ function executeVerificationCommand(planned, plan, executionProject) {
   let outcome;
   let childProcesses = [];
   try {
-    result = runSync(process.execPath, [CLI_FILE, ...argumentsList], {
+    result = await runProcess(process.execPath, [CLI_FILE, ...argumentsList], {
       maxBuffer: 64 * 1024 * 1024,
       timeoutMs: planned.timeoutMs + verificationStagePreparationBudgetMilliseconds(plan),
       cleanupTimeoutMs: PROCESS_CLEANUP_TIMEOUT_MS,
@@ -4098,7 +3958,7 @@ function executeVerificationCommand(planned, plan, executionProject) {
       const metadata = statSync(outcomePath);
       if (!metadata.isFile() || metadata.size > 8 * 1024) throw new Error('Internal stage outcome is malformed');
       const candidate = JSON.parse(readFileSync(outcomePath, 'utf8'));
-      const allowedClassifications = new Set(['process_spawn', 'configuration', 'precondition', 'fixture_isolation', 'plan_drift', 'report_io', 'timeout', 'cleanup_timeout']);
+      const allowedClassifications = new Set(['process_spawn', 'configuration', 'precondition', 'fixture_isolation', 'plan_drift', 'report_io', 'timeout', 'cleanup_timeout', 'cancelled']);
       if (candidate?.nonce !== outcomeNonce || !allowedClassifications.has(candidate?.classification)
         || !['structured_report', 'preflight', 'process_result'].includes(candidate?.source)) {
         throw new Error('Internal stage outcome is not bound to this invocation');
@@ -4680,7 +4540,7 @@ function publishVerificationPreflightFailure(
   }
 }
 
-function verifyProject(projectCandidate, options, expectedPlanDigest = '', invocationIdentity = '') {
+async function verifyProject(projectCandidate, options, expectedPlanDigest = '', invocationIdentity = '') {
   const project = resolveProject(projectCandidate);
   const started = Date.now();
   const output = resolve(options.output ?? join(project, '.gdeck', 'reports', `verify-${timestamp()}.json`));
@@ -4711,7 +4571,7 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
     invalidateVerificationPublicationArtifacts(plan);
     publicationDirectories = openVerificationPublicationDirectories(plan);
     executionSnapshot = plan.stages.some((stage) => stage.disposition === 'run' && stage.includeInLegacyReport)
-      ? createVerificationSnapshot(plan)
+      ? await createVerificationSnapshot(plan)
       : null;
     appendVerificationJournalRecord(verificationJournal, 'preflight_completed', {}, journalElapsedMs());
   } catch (error) {
@@ -4826,12 +4686,12 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
     }
   }
 
-  function executePlannedStage(planned) {
+  async function executePlannedStage(planned) {
     console.log(`\n${color.muted(`── ${planned.kind}: ${planned.target}`)}`);
     if (planned.reportPath && existsSync(planned.reportPath)) {
       throw new ResultClassificationError('report_io', `Invocation-owned stage report path is unexpectedly occupied: ${planned.reportPath}`);
     }
-    const command = executeVerificationCommand(planned, plan, executionSnapshot?.project ?? project);
+    const command = await executeVerificationCommand(planned, plan, executionSnapshot?.project ?? project);
     let detail = null;
     let reportError = '';
     let reportClassification = 'report_corrupt';
@@ -4960,7 +4820,7 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
       ordinal: journalOrdinal.get(planned.id), total: journalStages.length, stageId: planned.id,
     })) break;
     let stage;
-    try { stage = executePlannedStage(planned); }
+    try { stage = await executePlannedStage(planned); }
     catch (error) {
       stage = legacyStage(planned, {
         status: 'failed', exitCode: Number(error.exitCode ?? 126), outputTail: error.message,
@@ -5119,7 +4979,7 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
     }
   }
   if (exportExecutionAttempted && !planDrifted) {
-    const gitSha = releaseGitSha(project);
+    const gitSha = await releaseGitSha(project);
     for (const record of verifiedExportRecords) {
       if (record.errors.length > 0) continue;
       const artifactDirectory = dirname(resolve(project, record.artifact.path));
@@ -5160,7 +5020,7 @@ function verifyProject(projectCandidate, options, expectedPlanDigest = '', invoc
     const verifiedExportArtifacts = verifiedExportRecords
       .filter((record) => record.errors.length === 0)
       .map((record) => record.artifact);
-    writeReleaseManifest(project, { debug: false, publishRequested: false, artifacts: verifiedExportArtifacts, gitSha });
+    await writeReleaseManifest(project, { debug: false, publishRequested: false, artifacts: verifiedExportArtifacts, gitSha });
   }
 
   for (const pending of pendingExportStages) {
@@ -5781,28 +5641,28 @@ async function main() {
         status = evidenceIndexCommand(parsed.positional[0], parsed.options);
         break;
       case 'check':
-        status = checkProject(parsed.positional[0], parsed.options, internalVerificationStage);
+        status = await checkProject(parsed.positional[0], parsed.options, internalVerificationStage);
         break;
       case 'run':
         status = await runProject(parsed.positional[0], parsed.options, parsed.passthrough);
         break;
       case 'capture':
-        status = captureProject(parsed.positional, parsed.options);
+        status = await captureProject(parsed.positional, parsed.options);
         break;
       case 'benchmark':
-        status = benchmarkProject(parsed.positional, parsed.options, internalVerificationStage);
+        status = await benchmarkProject(parsed.positional, parsed.options, internalVerificationStage);
         break;
       case 'scenario':
-        status = runScenario(parsed.positional, parsed.options, internalVerificationStage);
+        status = await runScenario(parsed.positional, parsed.options, internalVerificationStage);
         break;
       case 'baseline':
-        status = baselineProject(parsed.positional, parsed.options);
+        status = await baselineProject(parsed.positional, parsed.options);
         break;
       case 'visual-test':
-        status = visualTest(parsed.positional, parsed.options, internalVerificationStage);
+        status = await visualTest(parsed.positional, parsed.options, internalVerificationStage);
         break;
       case 'verify':
-        status = verifyProject(
+        status = await verifyProject(
           parsed.positional[0], parsed.options, internalVerification.expectedPlanDigest, internalVerification.invocationIdentity,
         );
         break;
@@ -5816,17 +5676,17 @@ async function main() {
         status = exportInit(parsed.positional[0]);
         break;
       case 'export':
-        status = exportProject(parsed.positional, parsed.options, internalVerificationStage);
+        status = await exportProject(parsed.positional, parsed.options, internalVerificationStage);
         break;
       case 'unit':
-        status = runUnitTests(parsed.positional[0], parsed.options, internalVerificationStage, internalVerification.unitBinding);
+        status = await runUnitTests(parsed.positional[0], parsed.options, internalVerificationStage, internalVerification.unitBinding);
         break;
       case 'scene':
         status = parsed.positional[0] === 'set'
-          ? sceneSet(parsed.positional, parsed.options, internalVerificationStage)
+          ? await sceneSet(parsed.positional, parsed.options, internalVerificationStage)
           : parsed.positional[0] === 'restore'
             ? sceneRestore(parsed.positional, parsed.options, internalVerificationStage)
-            : sceneDoctor(parsed.positional, parsed.options, internalVerificationStage);
+            : await sceneDoctor(parsed.positional, parsed.options, internalVerificationStage);
         break;
       case 'editor':
         status = await editorCommand(parsed.positional, parsed.options);

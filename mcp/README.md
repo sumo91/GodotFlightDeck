@@ -105,8 +105,10 @@ these references do not claim to reconstruct unavailable engine logs.
 `timings` separates snapshot copy, validation, import, sealing and removal.
 Supervised processes expose monotonic launch, execution and cleanup durations;
 Verify stages also carry up to 16 bound child-process timing records when available.
-The compatibility direct-process mode reports combined child duration and
-`phaseBreakdownAvailable: false`; it cannot separate launch/run/cleanup.
+The compatibility direct-process mode now uses the same asynchronous lifecycle engine
+in-process and reports launch, execution and cleanup durations with
+`phaseBreakdownAvailable: true`. Historical direct-process reports with
+`phaseBreakdownAvailable: false` retain their combined-duration meaning.
 MCP returns at most six stage diagnostics (failures first); inspect the referenced
 aggregate report for the rest. Measurements are facts, not new timeout budgets.
 

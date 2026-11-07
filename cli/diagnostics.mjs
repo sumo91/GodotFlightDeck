@@ -142,9 +142,10 @@ export function assertionCompletion(kind, report) {
 
 export function boundedProcessTimings(value) {
   if (!value || typeof value !== 'object') return undefined;
-  if (value.scope === 'direct_child') return { clock: 'monotonic', scope: 'direct_child', phaseBreakdownAvailable: false,
+  if (value.scope === 'direct_child' && value.phaseBreakdownAvailable !== true) return { clock: 'monotonic', scope: 'direct_child', phaseBreakdownAvailable: false,
     ...(Number.isFinite(value.totalMs) && value.totalMs >= 0 ? { totalMs: value.totalMs } : {}) };
-  return { clock: 'monotonic', scope: 'supervised_child',
+  return { clock: 'monotonic', scope: value.scope === 'direct_child' ? 'direct_child' : 'supervised_child',
+    ...(value.scope === 'direct_child' ? { phaseBreakdownAvailable: true } : {}),
     ...Object.fromEntries(['launchMs', 'executionMs', 'cleanupMs', 'totalMs']
       .filter(key => Number.isFinite(value[key]) && value[key] >= 0).map(key => [key, value[key]])) };
 }

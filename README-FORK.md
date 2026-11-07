@@ -20,7 +20,7 @@ and hangs — even for `gdeck version`.
 
 1. **Default `GDECK_CURSOR_COMPAT=1`** (set `=0` to restore upstream supervisor behavior).
 2. Skip the outer `superviseCliInvocation` and run `main()` in-process.
-3. `runSync` uses direct `spawnSync` (with timeout) instead of nesting another `process-runner`.
+3. Direct mode uses the shared asynchronous process lifecycle in-process, with bounded TERM/KILL cleanup, instead of nesting another Node supervisor.
 4. Launcher: `bin\gdeck.cmd` / `bin\gdeck.mjs` sets `GODOT_BIN` default to Godot 4.7.1.
 5. **Windows export-template detection**: `templateDirectories()` includes `%APPDATA%\Godot\export_templates`.
 6. **Cold import** temporarily disables only the Flight Deck Editor plugin, then atomically restores `project.godot`.
@@ -31,7 +31,7 @@ and hangs — even for `gdeck version`.
 11. **P0 Agent navigation**: `gdeck help [verify|editor|scenario|project]`, `gdeck editor describe [action]`.
 12. **P1 Editor Bridge layering**: core-read / core-write / supplementary-write / destructive; `editorBridge.supplementaryEnabled`; destructive actions require `--apply`; `editor batch` previews by default.
 
-Trade-off: process-group cleanup / orphan kill is weaker than upstream on Windows. Prefer finite `--timeout` and headless profiles.
+Direct and supervised modes share process cleanup. POSIX regressions include stubborn descendants, cancellation and inherited output pipes. Windows Agent Shell Job Object compatibility and native process-tree cleanup require Windows validation; macOS results do not certify them.
 
 ### Skipped upstream item
 
