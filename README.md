@@ -2,7 +2,7 @@
 
 Godot Flight Deck 是一个面向自动化开发和 AI 编程代理的本地 Godot 驾驶舱。它统一处理环境诊断、脚本与单元测试、场景流程、运行时截图、视觉回归、性能预算、桌面导出和安全的 Editor 自动化，不需要操作系统屏幕录制或辅助功能权限。
 
-当前版本：`1.6.8`（Fork；详见 `README-FORK.md` / `CHANGELOG-FORK.md`）
+当前版本：`1.6.9`（Fork；详见 `README-FORK.md` / `CHANGELOG-FORK.md`）
 
 首要兼容目标：Godot `4.7`
 
@@ -22,6 +22,7 @@ gdeck init /path/to/godot-project
 gdeck doctor /path/to/godot-project
 gdeck evidence-index /path/to/godot-project --json
 gdeck check /path/to/godot-project
+gdeck class-info Control /path/to/godot-project --filter anchor --json
 gdeck capture default /path/to/godot-project
 gdeck benchmark default /path/to/godot-project --frames 600
 gdeck scenario full-loop /path/to/godot-project
@@ -110,6 +111,22 @@ gdeck describe editor --json
 - 将生成的截图和报告加入 `.gitignore`
 
 该命令可以重复执行，用于升级已安装的探针。Addon 会先写入同文件系统 staging、校验版本后再原子替换；项目级排他锁和持久化 journal 可在进程中断后的下一次 Init 恢复未完成的 Addon swap，配置、`project.godot`、`.gitignore` 和 token 也纳入带并发修改检测的回滚快照。托管文件使用临时文件、flush/fsync 与 rename 提交并保留 POSIX mode；平台特有 ACL/xattr 不作为跨平台保证。升级失败会恢复旧 Addon 与托管文件；Init 不会删除它无法证明已失效的 Editor session 元数据，过期会话应通过显式的 `editor cleanup-sessions` 安全清理。若 Init 进程被外部强制终止，锁会故意保留并阻止自动重入；确认原进程已退出后删除项目根的 `.gdeck-init.lock`，下一次 Init 会校验带 HMAC 与目录树指纹的 journal、恢复中断的 swap，再重新执行升级。若项目已在 Editor 中打开，必须重启 Editor 后才能继续 Bridge 写操作。
+
+### `gdeck class-info`
+
+查询项目实际选用的 Godot 引擎内置类 API，支持方法、参数、默认值、返回类型、属性、信号、继承链和成员声明归属。沿用引擎选择顺序：`--godot`、`GODOT_BIN`、项目配置，再尝试默认命令和安装路径；结果同时记录选中的入口和引擎自报的实际可执行路径、版本。
+
+```bash
+gdeck class-info Control /path/to/godot-project --filter anchor --json
+gdeck class-info Resource /path/to/godot-project --filter changed
+gdeck describe class-info --json
+```
+
+`--filter` 对成员名做不区分大小写的子串过滤；省略时返回全部成员。JSON 保留 Godot 元数据，补充 `typeName` 和 `declaredIn`；`default_args` 使用带 `type`、`typeName` 和 `text`（Godot `var_to_str` 表示）的值，避免 JSON 丢失 Vector2 等类型。`selection` 区分过滤前总数与返回数，无匹配不等于无 API。
+
+查询在空临时项目中运行并清理，不导入目标项目、不加载其脚本、autoload 或扩展。`metadataSource: ClassDB` 的范围为内置 core/editor 类的注册元数据，不包含实例动态属性（如 `script`）；项目 `class_name`、自定义扩展和 Vector2 等非 ClassDB 类型不在范围内。未注册名称报告 `class_not_found` 并说明范围，不能据此断言项目中不存在同名脚本类。
+
+`status: ok` 且 `complete: true` 表示已取得完整元数据，退出码为 0；元数据缺失返回 `incomplete`，无效查询或执行故障返回 `error`，退出非零。超时、清理失败、启动失败分别保留 124、125、127。CLI 可独立使用，不要求 MCP 连接。
 
 ### `gdeck doctor`
 

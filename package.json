@@ -1,6 +1,6 @@
 {
   "name": "godot-flight-deck",
-  "version": "1.6.8",
+  "version": "1.6.9",
   "private": true,
   "description": "Agent-tooling fork of Godot Flight Deck with changelog-driven 1.6.1/1.6.3 ports (Windows agent-shell Job Object workaround)",
   "type": "module",

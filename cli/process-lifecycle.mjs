@@ -330,7 +330,7 @@ export function executeProcess(specification, { signal, onOutput, handleSignals 
     }
 
     const LIFECYCLE_RESOURCE_PREFIXES = [
-      'gdeck-fixture-run-', 'gdeck-verification-snapshot-', 'gdeck-release-project-', 'gdeck-native-smoke-', 'gdeck-pi-batch-',
+      'gdeck-fixture-run-', 'gdeck-verification-snapshot-', 'gdeck-release-project-', 'gdeck-native-smoke-', 'gdeck-class-info-', 'gdeck-pi-batch-',
     ];
 
     async function lifecycleResourceIsSafe(path) {

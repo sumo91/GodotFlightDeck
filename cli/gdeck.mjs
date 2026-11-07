@@ -2,6 +2,7 @@
 import { CLI_COMMANDS, parseCliArguments, publicCommandDescription } from '../registry/commands.mjs';
 import { fsyncBestEffort, syncDirectoryBestEffort, writeFileAtomic, writeFileAtomicNoReplace } from './atomic-files.mjs';
 import { capturePairSummary, publishCapturePairs } from './capture-ab.mjs';
+import { classInfoCommand } from './class-info.mjs';
 import { renderDiagnosticText, writeUnitDiagnostics } from './diagnostics.mjs';
 import { assessDoctorCapabilities, capabilityRelevanceForPlan } from './doctor-capabilities.mjs';
 import { AGENT_DECISION_TREE, EDITOR_ACTION_CATALOG, HELP_DOMAINS, describeEditorAction, listEditorActionsByLayer, resolveEditorBridgePolicy, validateBatchOperations } from './editor-catalog.mjs';
@@ -3585,6 +3586,9 @@ async function main() {
         break;
       case 'check':
         status = await checkProject(parsed.positional[0], parsed.options, internalVerificationStage);
+        break;
+      case 'class-info':
+        status = await classInfoCommand(parsed.positional[0], parsed.positional[1], parsed.options);
         break;
       case 'run':
         status = await runProject(parsed.positional[0], parsed.options, parsed.passthrough);

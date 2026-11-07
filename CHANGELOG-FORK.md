@@ -3,7 +3,10 @@
 Changelog-driven port from upstream notes `1.6.0 → 1.6.3`, plus agent-shell ergonomics.
 This fork is **not** a byte-identical upstream release.
 
-## Unreleased (2026-11-08 — code-quality revisions)
+## 1.6.9 (2026-11-08 — class APIs and code-quality revisions)
+
+- Add CLI `class-info` for project-selected Godot built-in class APIs, with engine identity, inheritance, declaration owners, typed defaults, member filtering and explicit incomplete/error results. Queries run in an isolated empty project without loading game scripts or extensions.
+- Class-info validation: 86 Node tests and all three real-Godot suites passed on macOS / Godot 4.7.2. GreyRanger engine queries and actual API calls passed 9,185 checks; its existing worktree changes were preserved. See [class-info validation](docs/missions/builtin-class-info/verification.md).
 
 - Enforce frame-time budgets consistently; forward confirmed Pi destructive flags; retain watch errors across stream chunks and observation-window completion.
 - Share an asynchronous process lifecycle across direct CLI and supervised execution, including bounded descendant cleanup. Stop Verify after cancellation and preserve cancellation evidence.

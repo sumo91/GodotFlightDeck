@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
 const LIFECYCLE_TEMPORARY_PREFIXES = [
-  'gdeck-fixture-run-', 'gdeck-verification-snapshot-', 'gdeck-release-project-', 'gdeck-native-smoke-',
+  'gdeck-fixture-run-', 'gdeck-verification-snapshot-', 'gdeck-release-project-', 'gdeck-native-smoke-', 'gdeck-class-info-',
 ];
 
 export function privateLifecycleRegistry() {

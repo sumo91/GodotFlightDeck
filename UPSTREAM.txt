@@ -1,6 +1,6 @@
 Upstream original (untouched): D:\03_Godot\GodotFlightDeck-1.6.0-Windows
 Source package version: 1.6.0
-Fork version: 1.6.8
+Fork version: 1.6.9
 Fork purpose: agent-shell compatibility on Windows (Cursor and other agent shells; avoids nested Job Object supervisors)
 Port notes: 1.6.1 and 1.6.3 behaviors were changelog-driven ports (no upstream 1.6.3 package available).
 Pi 1.6.2 reload compatibility intentionally skipped (Cursor uses CLI only).
