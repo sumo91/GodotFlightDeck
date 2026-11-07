@@ -75,4 +75,3 @@ export function makeVerificationTreeWritable(root) {
   };
   visit(root);
 }
-

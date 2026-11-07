@@ -111,4 +111,3 @@ export function findGodot(config = {}, override = '') {
   }
   throw new Error('Godot executable not found. Set GODOT_BIN or .gdeck/config.json godotPath.');
 }
-

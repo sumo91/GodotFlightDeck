@@ -251,4 +251,3 @@ function projectGodotWithoutFlightDeckEditorPlugin(source) {
     .filter((item) => item && item !== `"${FLIGHT_DECK_EDITOR_PLUGIN}"`);
   return source.replace(enabledPattern, `enabled=PackedStringArray(${items.join(', ')})`);
 }
-

@@ -65,4 +65,3 @@ function recordInternalProcessTiming(phase, exitCode, timings) {
     nonce: internalStageOutcomeSink.nonce, processes: internalProcessTimings,
   }), { mode: 0o600 });
 }
-

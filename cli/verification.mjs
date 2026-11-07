@@ -578,4 +578,3 @@ export async function verifyProject(projectCandidate, options, expectedPlanDiges
     }
   }
 }
-

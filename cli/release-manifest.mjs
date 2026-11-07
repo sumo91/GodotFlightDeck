@@ -35,4 +35,3 @@ export async function writeReleaseManifest(project, values) {
   renameSync(temporaryManifest, manifestPath);
   return manifest;
 }
-

@@ -19,4 +19,3 @@ export function unitBindingForExecution({ project, report, timeoutMs, options, i
     runtimeArguments: unitRuntimeArguments(options),
   });
 }
-

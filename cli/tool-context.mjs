@@ -22,4 +22,3 @@ export const color = {
 export function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
-
